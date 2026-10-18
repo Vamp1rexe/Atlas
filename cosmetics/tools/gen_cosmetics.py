@@ -4,14 +4,33 @@
 Run from the repo root:  python3 cosmetics/tools/gen_cosmetics.py
 Needs Pillow. Add a new cosmetic by writing a function that returns a `Design`
 and listing it in DESIGNS at the bottom.
+
+The preview renderer below mirrors the in-game math (bone chain, JOML rotationXYZ,
+sin() animation), so the PNG/GIF previews show the real flap, not an approximation.
 """
 import json
 import math
 import os
+import random
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 os.chdir(ROOT)
+
+CLEAR = (0, 0, 0, 0)
+
+
+def lerp(a, b, t):
+    return tuple(round(a[k] + (b[k] - a[k]) * t) for k in range(3))
+
+
+def mul(c, f):
+    return tuple(max(0, min(255, round(v * f))) for v in c)
+
+
+def hex_rgb(h):
+    h = (h or "").lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) if len(h) == 6 else (255, 255, 255)
 
 
 # ---------------------------------------------------------------- texture atlas
@@ -21,6 +40,7 @@ class Atlas:
         self.items = []
 
     def alloc(self, w, h, painter):
+        w, h = int(w), int(h)
         if self.x + w > self.w:
             self.x, self.y, self.rowh = 0, self.y + self.rowh + 1, 0
         pos = (self.x, self.y)
@@ -31,7 +51,7 @@ class Atlas:
         return (pos[0], pos[1], pos[0] + w, pos[1] + h)
 
     def image(self):
-        img = Image.new("RGBA", (self.w, max(self.h, 1)), (0, 0, 0, 0))
+        img = Image.new("RGBA", (self.w, max(self.h, 1)), CLEAR)
         px = img.load()
         for (x0, y0), w, h, painter in self.items:
             for j in range(h):
@@ -42,47 +62,50 @@ class Atlas:
 
 # ---------------------------------------------------------------- bones
 class Rect:
-    """Flat slab in the bone's local frame (y down), z relative to the pivot."""
+    """Flat slab in the bone's local frame (y down). The visible face sits at z1."""
 
     def __init__(self, x0, y0, x1, y1, z0, z1, uv):
         self.x0, self.y0, self.x1, self.y1, self.z0, self.z1, self.uv = x0, y0, x1, y1, z0, z1, uv
 
 
 class Bone:
-    def __init__(self, name, parent, rel, rot_z=0.0, base=(0, 0), amp=(0, 0, 0), move=(0, 0, 0),
-                 speed=2.0, phase=0.0, rects=None, base_x=0.0):
-        self.name, self.parent, self.rel = name, parent, rel  # rel: pivot offset to parent (x, y, z)
-        self.rot_z = rot_z                                      # static in-plane angle
-        self.base_x, self.base_y = base_x, base[0] if base else 0
+    def __init__(self, name, parent, rel, rot_z=0.0, base_x=0.0, base_y=0.0, amp=(0, 0, 0),
+                 move=(0, 0, 0), speed=2.0, phase=0.0, rects=None):
+        self.name, self.parent, self.rel = name, parent, rel   # rel: pivot offset in the parent's frame
+        self.rot_z, self.base_x, self.base_y = rot_z, base_x, base_y
         self.amp, self.move, self.speed, self.phase = amp, move, speed, phase
         self.rects = rects or []
 
 
-def mirror(bones, suffix="_r"):
-    """Mirror a left wing into a right wing (x -> -x, uv flipped)."""
+def _rename(n):
+    return n[:-2] + "_r" if n.endswith("_l") else n + "_r"
+
+
+def mirror(bones):
+    """Left side to right side: x -> -x, texture flipped, y/z rotations negated."""
     out = []
     for b in bones:
-        m = Bone(b.name.replace("_l", suffix) if b.name.endswith("_l") else b.name + suffix,
-                 (b.parent.replace("_l", suffix) if b.parent and b.parent.endswith("_l") else (b.parent + suffix if b.parent else None)),
-                 (-b.rel[0], b.rel[1], b.rel[2]), -b.rot_z, (-b.base_y,), (b.amp[0], -b.amp[1], -b.amp[2]),
-                 (b.move[0], -b.move[1], -b.move[2]), b.speed, b.phase, None, b.base_x)
-        m.rects = [Rect(-r.x1, r.y0, -r.x0, r.y1, r.z0, r.z1, (r.uv[2], r.uv[1], r.uv[0], r.uv[3])) for r in b.rects]
-        out.append(m)
+        out.append(Bone(
+            _rename(b.name), _rename(b.parent) if b.parent else None,
+            (-b.rel[0], b.rel[1], b.rel[2]), -b.rot_z, b.base_x, -b.base_y,
+            (b.amp[0], -b.amp[1], -b.amp[2]), (b.move[0], -b.move[1], -b.move[2]),
+            b.speed, b.phase,
+            [Rect(-r.x1, r.y0, -r.x0, r.y1, r.z0, r.z1, (r.uv[2], r.uv[1], r.uv[0], r.uv[3])) for r in b.rects]))
     return out
 
 
 class Design:
-    def __init__(self, id, name, slot, rarity, description, attach, atlas, bones, root_pivot,
-                 default_color="", scale=1.0, art_from_behind=False):
+    def __init__(self, id, name, slot, rarity, description, attach, atlas, bones,
+                 default_color="", scale=1.0, art_from_behind=False, speed=2.0, card_scale=1.4):
         self.id, self.name, self.slot, self.rarity, self.description = id, name, slot, rarity, description
-        self.attach, self.atlas, self.bones, self.root_pivot = attach, atlas, bones, root_pivot
+        self.attach, self.atlas, self.bones = attach, atlas, bones
         self.default_color, self.scale, self.art_from_behind = default_color, scale, art_from_behind
+        self.speed, self.card_scale = speed, card_scale
 
-    # -- model json
     def pivots(self):
         piv = {}
         for b in self.bones:
-            pp = piv[b.parent] if b.parent else self.root_pivot
+            pp = piv[b.parent] if b.parent else (0.0, 0.0, 0.0)
             piv[b.name] = (pp[0] + b.rel[0], pp[1] + b.rel[1], pp[2] + b.rel[2])
         return piv
 
@@ -94,9 +117,8 @@ class Design:
             cubes = []
             for r in b.rects:
                 rev = [r.uv[2], r.uv[1], r.uv[0], r.uv[3]]
-                # seen from behind the south face runs toward -x: wings are drawn along +x, capes as seen
-                faces = {"south": list(r.uv) if self.art_from_behind else rev,
-                         "north": rev if self.art_from_behind else list(r.uv)}
+                # One face is enough: the mod draws every quad double-sided.
+                faces = {"south": list(r.uv) if self.art_from_behind else rev}
                 cubes.append({
                     "from": [round(p[0] + r.x0, 3), round(p[1] + r.y0, 3), round(p[2] + r.z0, 3)],
                     "to": [round(p[0] + r.x1, 3), round(p[1] + r.y1, 3), round(p[2] + r.z1, 3)],
@@ -113,150 +135,437 @@ class Design:
         return {"format": 2, "texture_size": [self.atlas.w, self.atlas.h], "attach": self.attach,
                 "offset": [0, 0, 0], "scale": self.scale, "bones": bones}
 
-    # -- 2d preview of the rest pose, seen from behind
-    def render(self, size, scale, bg=(22, 24, 29, 255), tint=None, body=True):
-        img = Image.new("RGBA", (size[0], size[1]), bg)
-        S = scale
-        cx, cy = size[0] / 2, size[1] * 0.36
-        d = ImageDraw.Draw(img)
-        if body:  # player silhouette: head, torso, arms, legs
-            def box(x0, y0, x1, y1, col):
-                d.rectangle([cx + x0 * S, cy + y0 * S, cx + x1 * S, cy + y1 * S], fill=col)
-            box(-4, -8, 4, 0, (82, 88, 99, 255)); box(-4, 0, 4, 12, (70, 76, 88, 255))
-            box(-8, 0, -4, 12, (62, 68, 79, 255)); box(4, 0, 8, 12, (62, 68, 79, 255))
-            box(-4, 12, 0, 24, (54, 59, 69, 255)); box(0, 12, 4, 24, (54, 59, 69, 255))
-        tex = self.atlas.image()
-        if tint:
-            px = tex.load()
-            for j in range(tex.height):
-                for i in range(tex.width):
-                    r, g, b, a = px[i, j]
-                    px[i, j] = (r * tint[0] // 255, g * tint[1] // 255, b * tint[2] // 255, a)
-        world, angle = {}, {}
-        draws = []
-        piv = self.pivots()
-        for b in self.bones:
-            if b.parent:
-                pw, pa = world[b.parent], angle[b.parent]
-                c, s = math.cos(math.radians(pa)), math.sin(math.radians(pa))
-                world[b.name] = (pw[0] + b.rel[0] * c - b.rel[1] * s, pw[1] + b.rel[0] * s + b.rel[1] * c)
-                angle[b.name] = pa + b.rot_z
-            else:
-                world[b.name] = (self.root_pivot[0] + b.rel[0], self.root_pivot[1] + b.rel[1])
-                angle[b.name] = b.rot_z
-            for r in b.rects:
-                draws.append((piv[b.name][2] + r.z0, b, r))
-        for _, b, r in sorted(draws, key=lambda t: t[0]):
+
+# ---------------------------------------------------------------- quad budget
+def merged_quads(img):
+    """Same greedy rectangle merge the mod does at load time."""
+    w, h = img.size
+    px = img.load()
+    done = [[False] * w for _ in range(h)]
+    n = 0
+    for j in range(h):
+        for i in range(w):
+            c = px[i, j]
+            if done[j][i] or c[3] == 0:
+                continue
+            cw = 1
+            while i + cw < w and not done[j][i + cw] and px[i + cw, j] == c:
+                cw += 1
+            ch = 1
+            while j + ch < h and all(not done[j + ch][k] and px[k, j + ch] == c for k in range(i, i + cw)):
+                ch += 1
+            for y in range(j, j + ch):
+                for x in range(i, i + cw):
+                    done[y][x] = True
+            n += 1
+    return n
+
+
+def count_quads(design):
+    img = design.atlas.image()
+    total = 0
+    for b in design.bones:
+        for r in b.rects:
             u0, v0, u1, v1 = r.uv
-            crop = tex.crop((min(u0, u1), min(v0, v1), max(u0, u1), max(v0, v1)))
-            if u1 < u0:
-                crop = crop.transpose(Image.FLIP_LEFT_RIGHT)
-            w, h = (r.x1 - r.x0), (r.y1 - r.y0)
-            crop = crop.resize((max(1, round(w * S)), max(1, round(h * S))), Image.NEAREST)
-            a = angle[b.name]
-            rot = crop.rotate(-a, expand=True, resample=Image.BICUBIC)
-            c, s = math.cos(math.radians(a)), math.sin(math.radians(a))
-            lx, ly = (r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2
-            wx = world[b.name][0] + lx * c - ly * s
-            wy = world[b.name][1] + lx * s + ly * c
-            img.alpha_composite(rot, (round(cx + wx * S - rot.width / 2), round(cy + wy * S - rot.height / 2)))
+            total += merged_quads(img.crop((min(u0, u1), min(v0, v1), max(u0, u1), max(v0, v1))))
+    return total
+
+
+# ---------------------------------------------------------------- 3d preview (mirrors the mod)
+def matmul(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+
+def matvec(m, v):
+    return [sum(m[i][k] * v[k] for k in range(3)) for i in range(3)]
+
+
+def rot_xyz(ax, ay, az):
+    """JOML Quaternionf.rotationXYZ: M = Rx * Ry * Rz (z is applied first). Degrees."""
+    ax, ay, az = (math.radians(a) for a in (ax, ay, az))
+    cx, sx, cy, sy, cz, sz = math.cos(ax), math.sin(ax), math.cos(ay), math.sin(ay), math.cos(az), math.sin(az)
+    rx = [[1, 0, 0], [0, cx, -sx], [0, sx, cx]]
+    ry = [[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]]
+    rz = [[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]]
+    return matmul(matmul(rx, ry), rz)
+
+
+IDENT = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+
+
+def pose_bones(design, t, move=0.0):
+    """world (R, p, s) per bone at time t seconds; move 0..1 is the walking factor."""
+    out = {}
+    for b in design.bones:
+        if b.parent:
+            rp, pp, s = out[b.parent]
+            off = matvec(rp, b.rel)
+            p = [pp[k] + s * off[k] for k in range(3)]
+        else:
+            rp, s = IDENT, design.scale
+            p = list(b.rel)
+        wave = math.sin(t * b.speed + b.phase)
+        ax = b.base_x + b.amp[0] * wave + b.move[0] * move
+        ay = b.base_y + b.amp[1] * wave + b.move[1] * move
+        az = b.rot_z + b.amp[2] * wave + b.move[2] * move
+        out[b.name] = (matmul(rp, rot_xyz(ax, ay, az)), p, s)
+    return out
+
+
+def _proj(p, phi, cx, cy, sc):
+    c, s = math.cos(phi), math.sin(phi)
+    x1 = p[0] * c + p[2] * s
+    z1 = -p[0] * s + p[2] * c
+    return (cx - x1 * sc, cy + p[1] * sc), z1
+
+
+def _tinted(img, tint):
+    if not tint or tint == (255, 255, 255):
         return img
+    out = img.copy()
+    px = out.load()
+    for j in range(out.height):
+        for i in range(out.width):
+            r, g, b, a = px[i, j]
+            if a:
+                px[i, j] = (r * tint[0] // 255, g * tint[1] // 255, b * tint[2] // 255, a)
+    return out
+
+
+def _tex_crop(img, uv):
+    u0, v0, u1, v1 = uv
+    crop = img.crop((min(u0, u1), min(v0, v1), max(u0, u1), max(v0, v1)))
+    return crop.transpose(Image.FLIP_LEFT_RIGHT) if u1 < u0 else crop
+
+
+def _paste_quad(img, crop, pa, pb, pc):
+    w, h = crop.size
+    ux, uy = (pb[0] - pa[0]) / w, (pb[1] - pa[1]) / w
+    vx, vy = (pc[0] - pa[0]) / h, (pc[1] - pa[1]) / h
+    det = ux * vy - uy * vx
+    if abs(det) < 1e-6:
+        return
+    pd = (pb[0] + pc[0] - pa[0], pb[1] + pc[1] - pa[1])
+    xs, ys = (pa[0], pb[0], pc[0], pd[0]), (pa[1], pb[1], pc[1], pd[1])
+    x0, y0 = max(0, math.floor(min(xs)) - 1), max(0, math.floor(min(ys)) - 1)
+    x1, y1 = min(img.width, math.ceil(max(xs)) + 1), min(img.height, math.ceil(max(ys)) + 1)
+    if x1 <= x0 or y1 <= y0:
+        return
+    a, b, d, e = vy / det, -vx / det, -uy / det, ux / det
+    c = a * (x0 - pa[0]) + b * (y0 - pa[1])
+    f = d * (x0 - pa[0]) + e * (y0 - pa[1])
+    out = crop.transform((x1 - x0, y1 - y0), Image.AFFINE, (a, b, c, d, e, f), resample=Image.NEAREST)
+    img.alpha_composite(out, (x0, y0))
+
+
+BODY = [  # head, torso, arms, legs in model space (y down)
+    ((-4, 12, -2, 0, 24, 2), (58, 64, 76)), ((-0, 12, -2, 4, 24, 2), (58, 64, 76)),
+    ((-4, 0, -2, 4, 12, 2), (76, 84, 98)),
+    ((4, 0, -2, 8, 12, 2), (68, 76, 90)), ((-8, 0, -2, -4, 12, 2), (68, 76, 90)),
+    ((-4, -8, -4, 4, 0, 4), (96, 104, 118)),
+]
+
+
+def _draw_box(d, box, col, phi, cx, cy, sc):
+    x0, y0, z0, x1, y1, z1 = box[0], box[1], box[2], box[3], box[4], box[5]
+    faces = [
+        ((0, 0, 1), [(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)], 1.0),
+        ((0, 0, -1), [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0)], 0.78),
+        ((1, 0, 0), [(x1, y0, z0), (x1, y0, z1), (x1, y1, z1), (x1, y1, z0)], 0.88),
+        ((-1, 0, 0), [(x0, y0, z0), (x0, y0, z1), (x0, y1, z1), (x0, y1, z0)], 0.88),
+        ((0, -1, 0), [(x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1)], 1.12),
+        ((0, 1, 0), [(x0, y1, z0), (x1, y1, z0), (x1, y1, z1), (x0, y1, z1)], 0.7),
+    ]
+    c, s = math.cos(phi), math.sin(phi)
+    vis = []
+    for n, pts, shade in faces:
+        if -n[0] * s + n[2] * c <= 0.01:
+            continue
+        proj = [_proj(p, phi, cx, cy, sc) for p in pts]
+        vis.append((sum(z for _, z in proj) / 4, [q for q, _ in proj], shade))
+    for _, poly, shade in sorted(vis, key=lambda v: v[0]):
+        d.polygon(poly, fill=mul(col, shade) + (255,))
+
+
+def render(design, t=0.0, move=0.0, size=(400, 400), scale=5.0, phi=0.0, bg=(22, 24, 29, 255),
+           tint=None, body=True, cy_frac=0.36):
+    ss = 2
+    w, h = size[0] * ss, size[1] * ss
+    img = Image.new("RGBA", (w, h), bg)
+    cx, cy, sc = w / 2, h * cy_frac, scale * ss
+    if body:
+        d = ImageDraw.Draw(img)
+        c, s = math.cos(phi), math.sin(phi)
+        order = sorted(BODY, key=lambda b: -(-((b[0][0] + b[0][3]) / 2) * s + ((b[0][2] + b[0][5]) / 2) * c))
+        for box, col in order:
+            _draw_box(d, box, col, phi, cx, cy, sc)
+    tex = _tinted(design.atlas.image(), tint)
+    poses = pose_bones(design, t, move)
+    items = []
+    for b in design.bones:
+        rmat, p, s = poses[b.name]
+        for r in b.rects:
+            def world(x, y, z):
+                v = matvec(rmat, (x, y, z))
+                return [p[k] + s * v[k] for k in range(3)]
+            za = r.z1
+            wa, wb, wc = world(r.x0, r.y0, za), world(r.x1, r.y0, za), world(r.x0, r.y1, za)
+            wd = world((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2, za)
+            (pa, _), (pb, _), (pc, _), (_, depth) = (_proj(q, phi, cx, cy, sc) for q in (wa, wb, wc, wd))
+            items.append((depth, pa, pb, pc, r.uv))
+    for _, pa, pb, pc, uv in sorted(items, key=lambda i: i[0]):
+        _paste_quad(img, _tex_crop(tex, uv), pa, pb, pc)
+    return img.resize(size, Image.LANCZOS)
+
+
+# ---------------------------------------------------------------- painters
+def bone_painter(L, th, pal, taper=0.45):
+    c = (th - 1) / 2.0
+
+    def paint(i, j, W, H):
+        t = i / max(1, L - 1)
+        hw = th / 2.0 * (1 - taper * t)
+        if abs(j - c) > hw:
+            return CLEAR
+        col = pal["hi"] if j < c - hw * 0.3 else (pal["dark"] if j > c + hw * 0.3 else pal["mid"])
+        return col + (255,)
+    return paint
+
+
+def claw_painter(L, h, pal, bend=0.0):
+    def paint(i, j, W, H):
+        t = i / max(1, L - 1)
+        c = (h - 1) / 2.0 + bend * h * t * t
+        hw = max(0.55, (h / 2.0) * (1 - t) ** 0.9)
+        d = j - c
+        if abs(d) > hw:
+            return CLEAR
+        col = pal["hi"] if d < -0.2 else (pal["dark"] if d > 0.6 else pal["mid"])
+        return col + (255,)
+    return paint
+
+
+def feather_painter(L, w, kind, pal, k):
+    half, c = w / 2.0, (w - 1) / 2.0
+    jit = 1.0 - 0.035 * (k % 3)
+
+    def paint(i, j, W, H):
+        t = i / max(1, L - 1)
+        if kind == "round":
+            prof = min(1.0, 0.55 + t * 2.0)
+            if t > 0.72:
+                prof *= math.sqrt(max(0.0, 1 - ((t - 0.72) / 0.28) ** 2))
+        else:
+            prof = min(1.0, 0.45 + t * 3.0)
+            if t > 0.55:
+                prof *= max(0.0, 1 - (t - 0.55) / 0.45) ** 0.85
+        d = abs(j - c)
+        hw = half * prof
+        if d > hw:
+            return CLEAR
+        if j == round(c):
+            col = pal["rachis"]
+        elif d > hw - 1.0 and w >= 5:
+            col = pal["dark"]
+        else:
+            col = pal["light"] if j < c else pal["base"]
+        if t > 0.82:
+            col = lerp(col, pal["tip"], 0.6)
+        elif t < 0.12:
+            col = mul(col, 0.86)
+        return mul(col, jit) + (255,)
+    return paint
+
+
+# ---------------------------------------------------------------- wing builder
+class WingBuilder:
+    """Bones are placed by absolute rest angle (degrees, y down: -90 is up, 90 is down)."""
+
+    def __init__(self, atlas, speed):
+        self.atlas, self.speed = atlas, speed
+        self.bones, self.abs, self.len, self.phase = [], {}, {}, {}
+        self.n = 0
+
+    def bone(self, name, parent, t, angle, length, rects, shoulder=None, base_x=0.0, base_y=0.0,
+             amp=(0, 0, 0), move=(0, 0, 0), phase=0.0):
+        if parent is None:
+            rel, rot = shoulder, angle
+        else:
+            rel, rot = (t * self.len[parent], 0.0, 0.0), angle - self.abs[parent]
+        self.bones.append(Bone(name, parent, rel, rot, base_x, base_y, amp, move, self.speed, phase, rects))
+        self.abs[name], self.len[name], self.phase[name] = angle, length, phase
+        return self.bones[-1]
+
+    def rect(self, x0, y0, x1, y1, z, painter):
+        uv = self.atlas.alloc(x1 - x0, y1 - y0, painter)
+        return Rect(x0, y0, x1, y1, z - 0.3, z, uv)
+
+    def bone_rect(self, L, th, z, pal, taper=0.45):
+        return self.rect(0, -th / 2.0, L, th / 2.0, z, bone_painter(L, th, pal, taper))
+
+    def claw_rect(self, x0, L, h, z, pal, bend=0.0):
+        return self.rect(x0, -h / 2.0, x0 + L, h / 2.0, z, claw_painter(L, h, pal, bend))
+
+    def feather(self, parent, t, angle, L, w, kind, pal, z):
+        self.n += 1
+        name = f"f{self.n}_l"
+        rect = self.rect(0.5, -w / 2.0, 0.5 + L, w / 2.0, z, feather_painter(L, w, kind, pal, self.n))
+        self.bone(name, parent, t, angle, L, [rect], amp=(0, 1.5 + 0.06 * L, 2.2),
+                  phase=self.phase[parent] + 0.3 + 0.35 * t)
+
+    def membrane(self, host, host_len, partner_len, delta, pal, bite, jag, holes, ribs, seed, z=0.5):
+        """Wedge of skin between this finger and the next one, with a concave, optionally ragged edge."""
+        d = math.radians(delta)
+        a = (host_len, 0.0)
+        b = (partner_len * math.cos(d), partner_len * math.sin(d))
+        rnd = random.Random(seed)
+        mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+        ml = math.hypot(mx, my)
+        ux, uy = -mx / ml, -my / ml
+        pts = [(0.0, 0.0), a]
+        n = 14
+        for s in range(1, n):
+            f = s / n
+            off = bite * math.sin(math.pi * f)
+            if jag:
+                off += rnd.uniform(-jag, jag) * math.sqrt(math.sin(math.pi * f))
+            off = max(0.0, off)
+            pts.append((a[0] * (1 - f) + b[0] * f + ux * off, a[1] * (1 - f) + b[1] * f + uy * off))
+        pts.append(b)
+        x0, y0 = math.floor(min(p[0] for p in pts)), math.floor(min(p[1] for p in pts))
+        x1, y1 = math.ceil(max(p[0] for p in pts)), math.ceil(max(p[1] for p in pts))
+        W, H = x1 - x0, y1 - y0
+        ss = 4
+        m = Image.new("L", (W * ss, H * ss), 0)
+        ImageDraw.Draw(m).polygon([((px - x0) * ss, (py - y0) * ss) for px, py in pts], fill=255)
+        m = m.resize((W, H), Image.BOX).load()
+        mask = [[m[i, j] >= 128 for i in range(W)] for j in range(H)]
+        for _ in range(holes):
+            f, r = rnd.uniform(0.28, 0.72), rnd.uniform(0.5, 0.78) * host_len
+            hx, hy, hr = r * math.cos(f * d) - x0, r * math.sin(f * d) - y0, rnd.uniform(1.3, 2.2)
+            for j in range(H):
+                for i in range(W):
+                    if math.hypot(i + 0.5 - hx, j + 0.5 - hy) <= hr:
+                        mask[j][i] = False
+
+        def inside(i, j):
+            return 0 <= i < W and 0 <= j < H and mask[j][i]
+
+        def paint(i, j, W_, H_):
+            if not mask[j][i]:
+                return CLEAR
+            if not (inside(i + 1, j) and inside(i - 1, j) and inside(i, j + 1) and inside(i, j - 1)):
+                return pal["edge"] + (255,)
+            px, py = x0 + i + 0.5, y0 + j + 0.5
+            f, r = math.atan2(py, px) / d, math.hypot(px, py)
+            if f < 0.06 or f > 0.94:
+                col = pal["vein"]
+            elif ribs:
+                col = pal["light"] if int((px + 100) // 3) % 2 == 0 else pal["base"]
+            else:
+                col = pal["dark"] if r < host_len * 0.28 else (pal["light"] if r > host_len * 0.78 else pal["base"])
+                if abs(f - 0.5) < 0.04 and r > 5:
+                    col = lerp(col, pal["vein"], 0.5)
+            return col + (255,)
+        return self.rect(x0, y0, x1, y1, z, paint)
+
+
+SHOULDER = (2.5, 3.0, 2.3)
+
+
+def finish(b, id, name, rarity, desc, color, scale, speed, card):
+    bones = b.bones + mirror(b.bones)
+    return Design(id, name, "wings", rarity, desc, "body", b.atlas, bones, color, scale, False, speed, card)
 
 
 # ---------------------------------------------------------------- designs
-def lerp(a, b, t):
-    return tuple(round(a[k] + (b[k] - a[k]) * t) for k in range(3))
-
-
 def angel():
-    atlas = Atlas(192)
+    b = WingBuilder(Atlas(256), speed=2.2)
+    gold = dict(hi=(255, 228, 150), mid=(228, 180, 84), dark=(160, 112, 44))
 
-    def feather(L, w):
-        base, hi, lo, vein, tip = (246, 247, 251), (255, 255, 255), (205, 213, 230), (255, 252, 240), (190, 202, 226)
+    def pal(f):
+        return dict(base=mul((244, 246, 252), f), light=mul((255, 255, 255), f), dark=mul((204, 212, 232), f),
+                    rachis=mul((255, 243, 214), f), tip=mul((182, 196, 232), f))
+    back, mid, front = pal(0.93), pal(0.98), pal(1.0)
+    A_ARM, A_FORE, A_HAND = -64, -30, -8
 
-        def paint(i, j, W, H):
-            taper = i - (L - 4)
-            if taper > 0 and (j < taper * (w / 8.0) or j >= w - taper * (w / 8.0)):
-                return (0, 0, 0, 0)
-            col = base
-            if j == 0: col = hi
-            elif j == w - 1: col = lo
-            elif j == w // 2: col = vein
-            if i > L - 7: col = lerp(col, tip, (i - (L - 7)) / 7.0)
-            return col + (255,)
-        return paint
+    b.bone("arm_l", None, 0, A_ARM, 11, [b.bone_rect(11, 3, 3.2, gold, 0.3)], shoulder=SHOULDER,
+           base_y=-24, amp=(0, 15, 3), move=(0, -10, 0), phase=0.0)
+    b.bone("fore_l", "arm_l", 1.0, A_FORE, 13, [b.bone_rect(13, 3, 3.2, gold, 0.3)], amp=(0, 9, 3), phase=0.5)
+    b.bone("hand_l", "fore_l", 1.0, A_HAND, 8, [b.bone_rect(8, 2, 3.2, gold, 0.5)], amp=(0, 8, 4), phase=1.0)
 
-    arm = 16
-    bones = [Bone("wing_l", None, (2.5, 3.0, 2.3), -55, (-22,), (0, 18, 4), (0, 10, 0), 2.4, 0.0,
-                  [Rect(0, -1.2, arm + 1, 1.2, 0, 1.0, atlas.alloc(arm + 1, 2, lambda i, j, W, H: (240, 243, 250, 255)))])]
-    k = 0
-
-    def add(positions, angles, lengths, w, z):
-        nonlocal k
-        for sx, a, L in zip(positions, angles, lengths):
-            uv = atlas.alloc(L, w, feather(L, w))
-            bones.append(Bone(f"f{k}_l", "wing_l", (sx, 0, 0), a, (0,), (0, 2.5 + L / 14.0, 0), (0, 0, 0),
-                              2.4, 0.22 * k, [Rect(0.5, -w / 2, 0.5 + L, w / 2, z, z + 0.5, uv)]))
-            k += 1
-    sec_s = [3, 5.5, 8, 10.5, 13, 15]
-    sec_a = [100, 98, 95, 92, 88, 85]
-    sec_l = [8, 11, 14, 17, 19, 20]
-    add(sec_s, sec_a, sec_l, 5, 0.0)                                       # secondaries (back layer)
-    add([arm] * 5, [10, 28, 46, 64, 82], [22, 27, 29, 26, 21], 5, 0.7)     # primaries
-    add(sec_s, [a - 8 for a in sec_a], [round(l * 0.55) + 1 for l in sec_l], 5, 1.4)  # coverts (front)
-    bones += mirror(bones)
-    return Design("wings_angel", "Engelsflügel", "wings", "epic",
-                  "Weiße Federflügel, die ruhig schlagen.", "body", atlas, bones, (0, 0, 0), "#ffffff", 1.0)
+    sec_t = [0.08, 0.24, 0.4, 0.56, 0.72, 0.9]
+    sec_a = [92, 85, 78, 71, 64, 57]
+    for t, a, L in zip(sec_t, sec_a, [22, 22, 21, 20, 18, 16]):
+        b.feather("fore_l", t, a, L, 7, "round", back, 0.2)
+    pri_t = [1.0, 0.84, 0.68, 0.52, 0.36, 0.2, 0.06]
+    pri_a = [-2, 12, 26, 40, 53, 65, 76]
+    for t, a, L in zip(pri_t, pri_a, [24, 28, 29, 28, 26, 23, 20]):
+        b.feather("hand_l", t, a, L, 5, "point", mid, 0.9)
+    for t, a, L in zip(pri_t[:6], pri_a[:6], [10, 12, 12, 12, 11, 10]):
+        b.feather("hand_l", t, a, L, 5, "round", front, 1.5)
+    for t, a, L in zip(sec_t, sec_a, [11, 11, 11, 10, 10, 9]):
+        b.feather("fore_l", t, a - 3, L, 7, "round", front, 1.6)
+    for t, a in zip([0.1, 0.3, 0.5, 0.7, 0.9], [96, 95, 94, 93, 92]):
+        b.feather("fore_l", t, a, 6, 5, "round", front, 2.1)
+    for t in (0.5, 0.78, 1.0):
+        b.feather("arm_l", t, 98, 6, 5, "round", front, 2.1)
+    for t, a, L in zip([0.15, 0.35, 0.55, 0.75, 0.95], [104, 99, 94, 89, 84], [11, 13, 14, 13, 11]):
+        b.feather("arm_l", t, a, L, 7, "round", front, 2.8)
+    for a, L in zip([-58, -40], [8, 7]):
+        b.feather("fore_l", 1.0, a, L, 3, "point", front, 1.9)
+    return finish(b, "wings_angel", "Engelsflügel", "epic",
+                  "Gefiederte Flügel mit goldenem Rahmen.", "#ffffff", 0.72, 2.2, 1.9)
 
 
-def bat_wing(id, name, rarity, desc, arm, fore, fingers, mem_w, color, flap_amp, speed, spikes, scale, scalloped):
-    atlas = Atlas(192)
-    bone_col, bone_hi = (122, 122, 122), (168, 168, 168)
+MEM_DEMON = dict(base=(204, 204, 204), light=(236, 236, 236), dark=(152, 152, 152), vein=(116, 116, 116), edge=(86, 86, 86))
+MEM_DRAGON = dict(base=(184, 184, 184), light=(218, 218, 218), dark=(134, 134, 134), vein=(98, 98, 98), edge=(70, 70, 70))
+BONE_DEMON = dict(hi=(216, 216, 216), mid=(160, 160, 160), dark=(104, 104, 104))
+BONE_DRAGON = dict(hi=(204, 204, 204), mid=(148, 148, 148), dark=(92, 92, 92))
+CLAW = dict(hi=(255, 255, 255), mid=(226, 226, 226), dark=(156, 156, 156))
 
-    def bone_paint(i, j, W, H):
-        c = bone_hi if j == 0 else (bone_col if j < H - 1 else (88, 88, 88))
-        return c + (255,)
 
-    def membrane(L, w):
-        def paint(i, j, W, H):
-            if scalloped and j >= w - 2 and (i % 6) > 2:
-                return (0, 0, 0, 0)
-            t = j / max(1, w - 1)
-            c = lerp((222, 222, 222), (178, 178, 178), t)
-            if i % 5 == 0: c = lerp(c, (120, 120, 120), 0.55)       # veins
-            if j == w - 1: c = lerp(c, (110, 110, 110), 0.6)         # trailing edge
-            return c + (255,)
-        return paint
+def bat_wing(id, name, rarity, desc, color, scale, speed, card, arm, fore, a_arm, a_fore, fingers, anchor,
+             mem, bone, th, bite, jag, holes, ribs, spikes, seed):
+    b = WingBuilder(Atlas(256), speed)
+    arm_len, fore_len = arm, fore
+    b.bone("arm_l", None, 0, a_arm, arm_len, [b.bone_rect(arm_len, th[0], 1.6, bone, 0.3)], shoulder=SHOULDER,
+           base_y=-22, amp=(0, 16, 3), move=(0, -10, 0), phase=0.0)
+    b.bone("fore_l", "arm_l", 1.0, a_fore, fore_len, [b.bone_rect(fore_len, th[1], 1.6, bone, 0.3)],
+           amp=(0, 10, 3), phase=0.55)
+    b.bone("horn_l", "arm_l", 1.0, a_arm - 40, 6 if ribs else 5, [b.claw_rect(0, 6 if ribs else 5, 3, 1.8, CLAW, 0.3)],
+           phase=0.1)
+    for n, t in enumerate(spikes):
+        b.bone(f"spike{n}_l", "fore_l", t, a_fore - 80, 5, [b.claw_rect(0, 5, 3, 1.8, CLAW)], phase=0.55)
+    b.bone("thumb_l", "fore_l", 1.0, a_fore - 62, 6, [b.claw_rect(0, 6, 3, 1.8, CLAW, 0.45)], phase=0.55)
 
-    bones = []
-    arm_uv = atlas.alloc(arm, 3, bone_paint)
-    sail_uv = atlas.alloc(arm - 2, 10, membrane(arm - 2, 10))
-    rects = [Rect(0, -1.5, arm, 1.5, 0, 1.4, arm_uv), Rect(2, 1.5, arm, 11.5, 0.45, 0.95, sail_uv)]
-    for n in range(spikes):
-        sx = 3 + n * (arm - 5) / max(1, spikes - 1) if spikes > 1 else 4
-        rects.append(Rect(sx, -3.6, sx + 1.6, -1.5, 0.2, 1.2, atlas.alloc(2, 2, bone_paint)))
-    bones.append(Bone("arm_l", None, (2.5, 3.0, 2.3), -50, (-20,), (0, flap_amp, 3), (0, 10, 0), speed, 0.0, rects))
-    bones.append(Bone("fore_l", "arm_l", (arm, 0, 0), 65, (0,), (0, flap_amp * 0.45, 0), (0, 4, 0), speed, 0.5,
-                      [Rect(0, -1.2, fore, 1.2, 0.1, 1.2, atlas.alloc(fore, 3, bone_paint))]))
+    angles = [f[0] for f in fingers]
+    lengths = [f[1] for f in fingers]
     for n, (ang, L) in enumerate(fingers):
-        mw = mem_w - (2 if n == len(fingers) - 1 else 0)
-        rects = [Rect(0, -0.7, L, 0.7, 0.1, 1.1, atlas.alloc(L, 2, bone_paint)),
-                 Rect(2, 0.7, L - 1, 0.7 + mw, 0.35, 0.85, atlas.alloc(L - 3, mw, membrane(L - 3, mw))),
-                 Rect(L, -0.6, L + 2.6, 0.6, 0.1, 1.1, atlas.alloc(3, 1, lambda i, j, W, H: (60, 60, 60, 255)))]
-        bones.append(Bone(f"fin{n}_l", "fore_l", (fore, 0, 0), ang, (0,), (0, flap_amp * 0.35 + n * 1.5, 0), (0, 3, 0),
-                          speed, 0.9 + n * 0.3, rects))
-    bones += mirror(bones)
-    return Design(id, name, "wings", rarity, desc, "body", atlas, bones, (0, 0, 0), color, scale)
+        last = n == len(fingers) - 1
+        if last:
+            delta, partner = anchor[0] - ang, anchor[1]
+        else:
+            delta, partner = angles[n + 1] - ang, lengths[n + 1]
+        rects = [b.bone_rect(L, th[2], 1.5, bone, 0.5),
+                 b.claw_rect(L - 0.5, 4, 2, 1.5, CLAW, 0.35),
+                 b.membrane(None, L, partner, delta, mem, bite, jag, holes if not last else holes + 1, ribs, seed + n)]
+        b.bone(f"fin{n}_l", "fore_l", 1.0, ang, L, rects, amp=(0, 5 + n * 1.2, 4), phase=0.8 + 0.12 * n)
+    return finish(b, id, name, rarity, desc, color, scale, speed, card)
 
 
 def demon():
-    return bat_wing("wings_demon", "Dämonenflügel", "epic", "Zerfetzte Fledermausflügel mit Krallen.",
-                    14, 14, [(-40, 24), (-5, 27), (38, 20)], 13, "#c4161c", 16, 2.1, 0, 1.0, True)
+    return bat_wing("wings_demon", "Dämonenflügel", "epic", "Zerfetzte Fledermausflügel mit Krallen und Löchern.",
+                    "#c4161c", 0.68, 2.1, 1.9, 11, 15, -66, -20,
+                    [(-50, 24), (-10, 27), (28, 23), (66, 16)], (124, 26),
+                    MEM_DEMON, BONE_DEMON, (3, 2, 2), 3.2, 1.3, 2, False, [], 10)
 
 
 def dragon():
-    return bat_wing("wings_dragon", "Drachenflügel", "legendary", "Riesige Schuppenflügel mit Stacheln.",
-                    18, 18, [(-48, 28), (-22, 34), (6, 32), (34, 24)], 16, "#3aa655", 20, 1.7, 3, 0.85, False)
+    return bat_wing("wings_dragon", "Drachenflügel", "legendary", "Breite Schuppenflügel mit Stachelkamm.",
+                    "#3aa655", 0.78, 1.7, 1.5, 12, 16, -62, -26,
+                    [(-52, 24), (-24, 31), (4, 30), (32, 26), (60, 19)], (124, 30),
+                    MEM_DRAGON, BONE_DRAGON, (4, 3, 2), 3.2, 0.0, 0, True, [0.25, 0.55, 0.85], 20)
 
 
 def cape():
@@ -266,9 +575,10 @@ def cape():
     def paint(i, j, w, h):
         t = j / (h - 1)
         c = lerp((24, 34, 58), (8, 10, 18), t)
-        if i < 1 or i >= w - 1: c = lerp(c, (62, 224, 160), 0.55)
+        if i < 1 or i >= w - 1:
+            c = lerp(c, (62, 224, 160), 0.55)
         cx, cy = w / 2 - 0.5, 15.0
-        r = math.hypot(i - cx, (j - cy))
+        r = math.hypot(i - cx, j - cy)
         if 7.0 <= r <= 9.0 or (abs(i - cx) < 0.9 and r < 9) or (abs(j - cy) < 0.9 and r < 9):
             c = (62, 224, 160)
         return c + (255,)
@@ -276,22 +586,20 @@ def cape():
     bones = []
     for i in range(8):
         rect = Rect(-5, 0, 5, 2.15, 0, 0.6, (uv[0], uv[1] + 6 * i, uv[2], uv[1] + 6 * i + 6))
-        if i == 0:
-            bones.append(Bone("row0", None, (0, 0, 2.8), 0, (0,), (0, 0, 0), (0, 0, 0), 1.8, 0.0, [rect], 1.6))
-        else:
-            bones.append(Bone(f"row{i}", f"row{i-1}", (0, 2, 0), 0, (0,), (0, 0, 0), (0, 0, 0), 1.8, 0.0, [rect], 1.6))
-        b = bones[-1]
-        b.amp, b.move, b.phase = (2.0, 0, 0.8), (5.0, 0, 0), -i * 0.55
+        bones.append(Bone(f"row{i}", f"row{i-1}" if i else None, (0, 0, 2.8) if i == 0 else (0, 2, 0),
+                          0, 1.6, 0, (2.0, 0, 0.8), (5.0, 0, 0), 1.8, -i * 0.55, [rect]))
     return Design("cape_atlas", "Atlas-Cape", "cape", "common", "Wehendes Cape mit Atlas-Globus.",
-                  "body", atlas, bones, (0, 0, 0), "#ffffff", 1.0, art_from_behind=True)
+                  "body", atlas, bones, "#ffffff", 1.0, True)
 
 
 DESIGNS = [angel, demon, dragon, cape]
+QUAD_BUDGET = 3500
 
 
-def hex_rgb(h):
-    h = h.lstrip("#")
-    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) if len(h) == 6 else (255, 255, 255)
+def panel_label(img, x, title, sub, font, small):
+    d = ImageDraw.Draw(img)
+    d.text((x + 22, 18), title, fill=(236, 237, 238, 255), font=font)
+    d.text((x + 22, 58), sub, fill=(154, 160, 169, 255), font=small)
 
 
 def main():
@@ -306,15 +614,16 @@ def main():
     for d in designs:
         d.atlas.image().save(f"textures/{d.id}.png")
         json.dump(d.model(), open(f"models/{d.id}.json", "w"), separators=(",", ":"))
+        q = count_quads(d)
+        print(f"{d.id}: {len(d.bones)} bones, {q} quads, texture {d.atlas.w}x{d.atlas.h}")
+        assert q <= QUAD_BUDGET, f"{d.id} exceeds the quad budget ({q} > {QUAD_BUDGET})"
         tint = hex_rgb(d.default_color) if d.default_color else None
         if d.slot == "cape":
-            prev = d.atlas.image().resize((120, 192), Image.NEAREST)
             card = Image.new("RGBA", (128, 128), (22, 24, 29, 255))
-            card.alpha_composite(prev.resize((80, 128), Image.NEAREST), (24, 0))
-            prev = card
+            card.alpha_composite(d.atlas.image().resize((80, 128), Image.NEAREST), (24, 0))
         else:
-            prev = d.render((128, 128), 1.45, tint=tint, body=True)
-        prev.save(f"previews/{d.id}.png")
+            card = render(d, 0.0, 0.0, (128, 128), d.card_scale, 0.0, tint=tint, cy_frac=0.42)
+        card.save(f"previews/{d.id}.png")
         entries.append({
             "id": d.id, "name": d.name, "slot": d.slot, "rarity": d.rarity, "description": d.description,
             "model": f"models/{d.id}.json", "texture": f"textures/{d.id}.png", "preview": f"previews/{d.id}.png",
@@ -322,22 +631,38 @@ def main():
         })
     json.dump({"format": 1, "cosmetics": entries}, open("catalog.json", "w"), indent=2, ensure_ascii=False)
 
-    # design sheet: the three wings, both sides, on a player silhouette
-    sheet = Image.new("RGBA", (1560, 640), (16, 18, 22, 255))
+    wings = [d for d in designs if d.slot == "wings"]
     try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 30)
-        small = ImageFont.truetype("DejaVuSans.ttf", 20)
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 28)
+        small = ImageFont.truetype("DejaVuSans.ttf", 18)
     except OSError:
         font = small = ImageFont.load_default()
-    d = ImageDraw.Draw(sheet)
-    for n, design in enumerate([x for x in designs if x.slot == "wings"]):
-        panel = design.render((520, 500), {"wings_angel": 6.0, "wings_demon": 4.6, "wings_dragon": 3.4}[design.id],
-                              bg=(22, 24, 29, 255), tint=hex_rgb(design.default_color))
-        sheet.alpha_composite(panel, (n * 520 + 0, 140))
-        d.text((n * 520 + 24, 24), design.name, fill=(236, 237, 238, 255), font=font)
-        d.text((n * 520 + 24, 70), design.description, fill=(154, 160, 169, 255), font=small)
-        d.text((n * 520 + 24, 100), "Farbe und Größe im Launcher einstellbar", fill=(27, 217, 106, 255), font=small)
+    scales = {"wings_angel": 7.6, "wings_demon": 7.6, "wings_dragon": 5.8}
+
+    # static sheet: rear view and three-quarter view, rest pose
+    pw, ph = 520, 470
+    sheet = Image.new("RGBA", (pw * 3, 100 + ph * 2), (16, 18, 22, 255))
+    for n, d in enumerate(wings):
+        tint = hex_rgb(d.default_color)
+        for row, phi in enumerate((0.0, math.radians(38))):
+            panel = render(d, 0.0, 0.0, (pw, ph), scales[d.id], phi, tint=tint, cy_frac=0.42)
+            sheet.alpha_composite(panel, (n * pw, 100 + row * ph))
+        panel_label(sheet, n * pw, d.name, d.description, font, small)
     sheet.convert("RGB").save("previews/design-sheet.png")
+
+    # animation: one full flap cycle, rear and three-quarter view
+    gw, gh, frames = 330, 330, 24
+    gif = []
+    for k in range(frames):
+        t = 2 * math.pi * k / frames
+        frame = Image.new("RGBA", (gw * 3, gh * 2), (16, 18, 22, 255))
+        for n, d in enumerate(wings):
+            tint = hex_rgb(d.default_color)
+            for row, phi in enumerate((0.0, math.radians(38))):
+                frame.alpha_composite(render(d, t / d.speed, 0.0, (gw, gh), scales[d.id] * gw / pw, phi, tint=tint,
+                                             cy_frac=0.42), (n * gw, row * gh))
+        gif.append(frame.convert("RGB").quantize(colors=96, method=Image.MEDIANCUT, dither=Image.NONE))
+    gif[0].save("previews/wings-animated.gif", save_all=True, append_images=gif[1:], duration=60, loop=0, optimize=True)
 
 
 if __name__ == "__main__":

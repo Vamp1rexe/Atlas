@@ -6,7 +6,7 @@ Ein Cosmetic besteht aus Modell, Textur, Vorschau und einem Eintrag in `catalog.
 python3 cosmetics/tools/gen_cosmetics.py
 ```
 
-Das Skript schreibt Modelle, Texturen, Previews, `catalog.json` und `previews/design-sheet.png`. Ein neues Cosmetic ist eine Funktion, die ein `Design` zurückgibt, plus ein Eintrag in `DESIGNS`.
+Das Skript schreibt Modelle, Texturen, Previews, `catalog.json`, `previews/design-sheet.png` (Ruhepose von hinten und schräg) und `previews/wings-animated.gif` (ein voller Flügelschlag). Die Vorschauen rechnen dieselbe Knochen- und Rotationsmathematik wie der Mod, zeigen also den echten Schlag. Das Skript bricht ab, wenn ein Cosmetic über dem Quad-Budget (3500) liegt. Ein neues Cosmetic ist eine Funktion, die ein `Design` zurückgibt, plus ein Eintrag in `DESIGNS`.
 
 ## catalog.json
 
@@ -50,7 +50,7 @@ Das Skript schreibt Modelle, Texturen, Previews, `catalog.json` und `previews/de
 - `pivot` steht im Ruhezustand in Attach-Koordinaten. Kindknochen drehen und bewegen sich mit ihrem Elternknochen mit.
 - `rotation.base` ist die feste Drehung in Grad (x, y, z). Reihenfolge: erst z, dann y, dann x. `amp` ist die Schwingung `amp * sin(speed * t + phase)` in Grad, `move` kommt dazu, wenn der Spieler läuft. Verschobene `phase`-Werte entlang einer Kette erzeugen die Welle (Federn, Cape).
 - Wurzelknochen skalieren um ihren eigenen Pivot, damit Flügel beim Vergrößern an den Schultern bleiben.
-- `faces` nennt pro Seite ein Rechteck `[u0, v0, u1, v1]` in Texeln (`west`, `north`, `east`, `south`, `up`, `down`). Ist `u1 < u0`, wird gespiegelt. `south` ist die Außenseite eines Rückencosmetics, so wie man sie von hinten sieht. Statt `faces` geht auch `uv` (Box-Layout wie bei Minecraft).
+- Pro Rechteck reicht eine Fläche (`south`): der Mod zeichnet jedes Quad beidseitig. `faces` nennt pro Seite ein Rechteck `[u0, v0, u1, v1]` in Texeln (`west`, `north`, `east`, `south`, `up`, `down`). Ist `u1 < u0`, wird gespiegelt. `south` ist die Außenseite eines Rückencosmetics, so wie man sie von hinten sieht. Statt `faces` geht auch `uv` (Box-Layout wie bei Minecraft).
 - Format 1 (`cubes` ohne Knochen, `animation: bob|spin`) wird weiterhin gelesen. Das Halo nutzt es.
 
 Die Textur wird beim Laden texelweise abgetastet und gleichfarbige Texel werden zu Rechtecken verschmolzen. Dadurch kostet ein Frame nur wenige Matrixoperationen und ein Zeichnen pro Knochen. Beleuchtung und Halbtransparenz sind noch nicht umgesetzt, Seiten werden leicht abgedunkelt.
@@ -64,3 +64,11 @@ Im Launcher unter Cosmetics → „Cape aus Bild“: Bild wählen, Ausschnitt ve
 1. Der Launcher synchronisiert Katalog und Dateien nach `%APPDATA%\Atlas\cosmetics`.
 2. Beim Start schreibt er den zusammengeführten Katalog und `options.json` (Größe/Farbe) und übergibt dem Spiel `-Datlas.cosmetics.dir`, `-Datlas.cosmetics.catalog`, `-Datlas.options` und `-Datlas.equipped=<ids>`.
 3. Der Atlas-Cosmetics-Mod (`mod/`, Fabric, Minecraft 26.2) liest das und zeichnet die Modelle am lokalen Spieler. Der Launcher installiert ihn samt Fabric API automatisch, sobald ein Cosmetic ausgerüstet ist.
+
+## Flügel-Anatomie
+
+Die eingebauten Flügel folgen echter Flügelanatomie (Winkel in Grad, y nach unten):
+
+- **Engel:** Oberarm, Unterarm und Hand als goldener Rahmen. Daran hängen vier Federlagen: Schulterfedern (weich, rund, decken den Ansatz), Armschwingen (groß, rund), Handschwingen (schmal, spitz, am längsten) und Deckfedern darüber, dazu zwei Daumenfedern. Jede Feder ist ein eigener Knochen, der mit Phasenverzug mitschlägt, dadurch läuft eine Welle von der Schulter zur Spitze.
+- **Dämon:** Arm, Ellbogenhorn, Daumenkralle und vier Finger mit Krallen. Zwischen den Fingern spannt eine Haut mit konkavem, ausgefranstem Rand und Löchern, unten läuft sie bis zur Hüfte.
+- **Drache:** wie der Dämon, aber fünf Finger, dickere Knochen, Stachelkamm am Unterarm und eine Haut mit Schuppenrippen und glattem Rand.
