@@ -193,8 +193,17 @@ def rot_xyz(ax, ay, az):
 IDENT = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
 
 
+SKEW = 0.42
+
+
+def shape(x):
+    """Same skewed sine as the mod: snaps through the centre, lingers at the turning points."""
+    return math.sin(x + SKEW * math.sin(x))
+
+
 def pose_bones(design, t, move=0.0):
-    """world (R, p, s) per bone at time t seconds; move 0..1 is the walking factor."""
+    """world (R, p, s) per bone; t is the mod's animation clock, move 0..1 the smoothed walking factor."""
+    amp_mul = 0.55 + 0.45 * move
     out = {}
     for b in design.bones:
         if b.parent:
@@ -204,7 +213,7 @@ def pose_bones(design, t, move=0.0):
         else:
             rp, s = IDENT, design.scale
             p = list(b.rel)
-        wave = math.sin(t * b.speed + b.phase)
+        wave = shape(t * b.speed + b.phase) * amp_mul
         ax = b.base_x + b.amp[0] * wave + b.move[0] * move
         ay = b.base_y + b.amp[1] * wave + b.move[1] * move
         az = b.rot_z + b.amp[2] * wave + b.move[2] * move
@@ -319,60 +328,95 @@ def render(design, t=0.0, move=0.0, size=(400, 400), scale=5.0, phi=0.0, bg=(22,
 
 
 # ---------------------------------------------------------------- painters
-def bone_painter(L, th, pal, taper=0.45):
-    c = (th - 1) / 2.0
+# Painters work in model units (1 unit = 1/16 block). WingBuilder.rect() samples them
+# DENSITY times per unit, so the textures carry finer detail than the old 1-texel look.
+DENSITY = 2
 
-    def paint(i, j, W, H):
-        t = i / max(1, L - 1)
+
+def q(f, step=0.05):
+    """Quantised brightness factor: keeps the number of distinct colours (and quads) small."""
+    return round(f / step) * step
+
+
+def fract(x):
+    return x - math.floor(x)
+
+
+def hash2(a, b):
+    return fract(math.sin(a * 127.1 + b * 311.7) * 43758.5453)
+
+
+def bone_painter(L, th, pal, taper=0.45):
+    def paint(u, v, W, H):
+        t = u / L
         hw = th / 2.0 * (1 - taper * t)
-        if abs(j - c) > hw:
+        d = v - th / 2.0
+        # rounded knuckle at the root end
+        if u < th * 0.5:
+            hw = max(hw, math.sqrt(max(0.0, (th * 0.5) ** 2 - (th * 0.5 - u) ** 2)))
+        if abs(d) > hw:
             return CLEAR
-        col = pal["hi"] if j < c - hw * 0.3 else (pal["dark"] if j > c + hw * 0.3 else pal["mid"])
+        col = pal["hi"] if d < -hw * 0.25 else (pal["dark"] if d > hw * 0.35 else pal["mid"])
+        if (u % 4.0) < 0.5 and u > 1.5:      # joint rings
+            col = mul(col, 0.82)
         return col + (255,)
     return paint
 
 
 def claw_painter(L, h, pal, bend=0.0):
-    def paint(i, j, W, H):
-        t = i / max(1, L - 1)
-        c = (h - 1) / 2.0 + bend * h * t * t
-        hw = max(0.55, (h / 2.0) * (1 - t) ** 0.9)
-        d = j - c
+    def paint(u, v, W, H):
+        t = u / L
+        c = h / 2.0 + bend * h * t * t
+        hw = max(0.3, (h / 2.0) * (1 - t) ** 0.9)
+        d = v - c
         if abs(d) > hw:
             return CLEAR
-        col = pal["hi"] if d < -0.2 else (pal["dark"] if d > 0.6 else pal["mid"])
+        col = pal["hi"] if d < -0.1 else (pal["dark"] if d > 0.3 else pal["mid"])
+        if t > 0.85:
+            col = mul(col, 1.0)
         return col + (255,)
     return paint
 
 
-def feather_painter(L, w, kind, pal, k):
-    half, c = w / 2.0, (w - 1) / 2.0
+def feather_painter(L, w, kind, pal, k, fine=True):
+    half = w / 2.0
     jit = 1.0 - 0.035 * (k % 3)
+    slope = 0.16 + 0.03 * (k % 3)          # barbs sweep toward the tip
 
-    def paint(i, j, W, H):
-        t = i / max(1, L - 1)
+    def paint(u, v, W, H):
+        t = u / L
+        d = v - half
+        ad = abs(d)
         if kind == "round":
-            prof = min(1.0, 0.55 + t * 2.0)
-            if t > 0.72:
-                prof *= math.sqrt(max(0.0, 1 - ((t - 0.72) / 0.28) ** 2))
+            prof = min(1.0, 0.5 + t * 2.2)
+            if t > 0.7:
+                prof *= math.sqrt(max(0.0, 1 - ((t - 0.7) / 0.3) ** 2))
         else:
-            prof = min(1.0, 0.45 + t * 3.0)
-            if t > 0.55:
-                prof *= max(0.0, 1 - (t - 0.55) / 0.45) ** 0.85
-        d = abs(j - c)
+            prof = min(1.0, 0.42 + t * 3.2)
+            if t > 0.5:
+                prof *= max(0.0, 1 - (t - 0.5) / 0.5) ** 0.8
         hw = half * prof
-        if d > hw:
+        if ad > hw:
             return CLEAR
-        if j == round(c):
+        # split barbs along the outer edge, more towards the tip
+        if fine and hw > 1.4 and ad > hw - 0.75 and t > 0.3:
+            if fract(u * 0.55 + k * 0.37 + (0.5 if d > 0 else 0.0)) < 0.2 * t:
+                return CLEAR
+        if ad < 0.28:                                  # rachis
             col = pal["rachis"]
-        elif d > hw - 1.0 and w >= 5:
-            col = pal["dark"]
         else:
-            col = pal["light"] if j < c else pal["base"]
-        if t > 0.82:
-            col = lerp(col, pal["tip"], 0.6)
-        elif t < 0.12:
-            col = mul(col, 0.86)
+            vane = (ad - 0.28) / max(0.01, hw - 0.28)  # 0 at the shaft, 1 at the edge
+            base = pal["light"] if d < 0 else pal["base"]
+            # barbs: fine stripes angled towards the tip
+            stripe = fract((ad * 1.7 + u * slope) * 0.9)
+            f = 1.0 + ((0.045 if stripe < 0.5 else -0.045) if fine else 0.0)
+            f *= 1.0 - 0.10 * vane ** 2                # softly darker toward the vane edge
+            f *= 0.9 + 0.1 * min(1.0, t * 4.0)         # darker down at the base
+            col = mul(base, q(f, 0.03 if fine else 0.06))
+            if ad > hw - 0.4:
+                col = lerp(col, pal["dark"], 0.55)
+            if t > 0.8:
+                col = lerp(col, pal["tip"], min(1.0, (t - 0.8) / 0.2) * 0.7)
         return mul(col, jit) + (255,)
     return paint
 
@@ -397,8 +441,13 @@ class WingBuilder:
         return self.bones[-1]
 
     def rect(self, x0, y0, x1, y1, z, painter):
-        uv = self.atlas.alloc(x1 - x0, y1 - y0, painter)
-        return Rect(x0, y0, x1, y1, z - 0.3, z, uv)
+        D = DENSITY
+        wu, hu = x1 - x0, y1 - y0
+
+        def sample(i, j, W, H):
+            return painter((i + 0.5) / D, (j + 0.5) / D, wu, hu)
+        uv = self.atlas.alloc(math.ceil(wu * D), math.ceil(hu * D), sample)
+        return Rect(x0, y0, x0 + math.ceil(wu * D) / D, y0 + math.ceil(hu * D) / D, z - 0.3, z, uv)
 
     def bone_rect(self, L, th, z, pal, taper=0.45):
         return self.rect(0, -th / 2.0, L, th / 2.0, z, bone_painter(L, th, pal, taper))
@@ -409,7 +458,7 @@ class WingBuilder:
     def feather(self, parent, t, angle, L, w, kind, pal, z):
         self.n += 1
         name = f"f{self.n}_l"
-        rect = self.rect(0.5, -w / 2.0, 0.5 + L, w / 2.0, z, feather_painter(L, w, kind, pal, self.n))
+        rect = self.rect(0.5, -w / 2.0, 0.5 + L, w / 2.0, z, feather_painter(L, w, kind, pal, self.n, fine=z >= 1.4))
         self.bone(name, parent, t, angle, L, [rect], amp=(0, 1.5 + 0.06 * L, 2.2),
                   phase=self.phase[parent] + 0.3 + 0.35 * t)
 
@@ -434,15 +483,16 @@ class WingBuilder:
         pts.append(b)
         x0, y0 = math.floor(min(p[0] for p in pts)), math.floor(min(p[1] for p in pts))
         x1, y1 = math.ceil(max(p[0] for p in pts)), math.ceil(max(p[1] for p in pts))
-        W, H = x1 - x0, y1 - y0
-        ss = 4
+        D = DENSITY
+        W, H = (x1 - x0) * D, (y1 - y0) * D
+        ss = 3
         m = Image.new("L", (W * ss, H * ss), 0)
-        ImageDraw.Draw(m).polygon([((px - x0) * ss, (py - y0) * ss) for px, py in pts], fill=255)
+        ImageDraw.Draw(m).polygon([((px - x0) * D * ss, (py - y0) * D * ss) for px, py in pts], fill=255)
         m = m.resize((W, H), Image.BOX).load()
         mask = [[m[i, j] >= 128 for i in range(W)] for j in range(H)]
         for _ in range(holes):
             f, r = rnd.uniform(0.28, 0.72), rnd.uniform(0.5, 0.78) * host_len
-            hx, hy, hr = r * math.cos(f * d) - x0, r * math.sin(f * d) - y0, rnd.uniform(1.3, 2.2)
+            hx, hy, hr = (r * math.cos(f * d) - x0) * D, (r * math.sin(f * d) - y0) * D, rnd.uniform(1.3, 2.2) * D
             for j in range(H):
                 for i in range(W):
                     if math.hypot(i + 0.5 - hx, j + 0.5 - hy) <= hr:
@@ -451,23 +501,46 @@ class WingBuilder:
         def inside(i, j):
             return 0 <= i < W and 0 <= j < H and mask[j][i]
 
+        def rim_dist(i, j):
+            """1 for the outermost texel ring, 2 for the next, ... (capped at 3)."""
+            for k in (1, 2):
+                if not all(inside(i + dx * k, j + dy * k) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))):
+                    return k
+            return 3
+
         def paint(i, j, W_, H_):
             if not mask[j][i]:
                 return CLEAR
-            if not (inside(i + 1, j) and inside(i - 1, j) and inside(i, j + 1) and inside(i, j - 1)):
+            rd = rim_dist(i, j)
+            if rd == 1:
                 return pal["edge"] + (255,)
-            px, py = x0 + i + 0.5, y0 + j + 0.5
+            px, py = x0 + (i + 0.5) / D, y0 + (j + 0.5) / D
             f, r = math.atan2(py, px) / d, math.hypot(px, py)
-            if f < 0.06 or f > 0.94:
-                col = pal["vein"]
-            elif ribs:
-                col = pal["light"] if int((px + 100) // 3) % 2 == 0 else pal["base"]
-            else:
-                col = pal["dark"] if r < host_len * 0.28 else (pal["light"] if r > host_len * 0.78 else pal["base"])
-                if abs(f - 0.5) < 0.04 and r > 5:
+            if f < 0.05 or f > 0.95:                       # runs along the finger bones
+                return pal["vein"] + (255,)
+            if rd == 2:
+                return lerp(pal["edge"], pal["dark"], 0.5) + (255,)
+            if ribs:
+                # overlapping scales in staggered rows, bigger towards the rim
+                sc = 3.4
+                row = math.floor(r / sc)
+                col_i = math.floor((f * d * r) / sc + (0.5 if row % 2 else 0.0))
+                cu = fract(r / sc)
+                sh = 0.90 + 0.12 * hash2(col_i, row)
+                col = pal["light"] if cu > 0.72 else (pal["base"] if cu > 0.18 else pal["dark"])
+                col = mul(col, q(sh, 0.04))
+                if (f * d * r / sc + (0.5 if row % 2 else 0.0)) % 1.0 < 0.08:
                     col = lerp(col, pal["vein"], 0.5)
+                return col + (255,)
+            # leathery skin: veins fanning out from the wrist, fainter between them
+            col = pal["dark"] if r < host_len * 0.28 else (pal["light"] if r > host_len * 0.78 else pal["base"])
+            col = mul(col, q(0.94 + 0.06 * (r / host_len), 0.03))
+            for vf, strength in ((0.25, 0.35), (0.5, 0.55), (0.75, 0.35)):
+                wob = 0.012 * math.sin(r * 0.5 + vf * 9)
+                if abs(f - vf - wob) < 0.5 * 0.55 / max(1.0, r) * 1.4 and r > 4:
+                    col = lerp(col, pal["vein"], strength)
             return col + (255,)
-        return self.rect(x0, y0, x1, y1, z, paint)
+        return self.rect(x0, y0, x1, y1, z, lambda u, v, a_, b_: paint(min(W - 1, int(u * D)), min(H - 1, int(v * D)), 0, 0))
 
 
 SHOULDER = (2.5, 3.0, 2.3)
@@ -480,7 +553,7 @@ def finish(b, id, name, rarity, desc, color, scale, speed, card):
 
 # ---------------------------------------------------------------- designs
 def angel():
-    b = WingBuilder(Atlas(256), speed=2.2)
+    b = WingBuilder(Atlas(512), speed=2.2)
     gold = dict(hi=(255, 228, 150), mid=(228, 180, 84), dark=(160, 112, 44))
 
     def pal(f):
@@ -527,7 +600,7 @@ CLAW = dict(hi=(255, 255, 255), mid=(226, 226, 226), dark=(156, 156, 156))
 
 def bat_wing(id, name, rarity, desc, color, scale, speed, card, arm, fore, a_arm, a_fore, fingers, anchor,
              mem, bone, th, bite, jag, holes, ribs, spikes, seed):
-    b = WingBuilder(Atlas(256), speed)
+    b = WingBuilder(Atlas(512), speed)
     arm_len, fore_len = arm, fore
     b.bone("arm_l", None, 0, a_arm, arm_len, [b.bone_rect(arm_len, th[0], 1.6, bone, 0.3)], shoulder=SHOULDER,
            base_y=-22, amp=(0, 16, 3), move=(0, -10, 0), phase=0.0)
@@ -593,7 +666,7 @@ def cape():
 
 
 DESIGNS = [angel, demon, dragon, cape]
-QUAD_BUDGET = 3500
+QUAD_BUDGET = 6000
 
 
 def panel_label(img, x, title, sub, font, small):
@@ -637,7 +710,7 @@ def main():
         small = ImageFont.truetype("DejaVuSans.ttf", 18)
     except OSError:
         font = small = ImageFont.load_default()
-    scales = {"wings_angel": 7.6, "wings_demon": 7.6, "wings_dragon": 5.8}
+    scales = {"wings_angel": 6.0, "wings_demon": 7.2, "wings_dragon": 5.6}
 
     # static sheet: rear view and three-quarter view, rest pose
     pw, ph = 520, 470
@@ -650,19 +723,20 @@ def main():
         panel_label(sheet, n * pw, d.name, d.description, font, small)
     sheet.convert("RGB").save("previews/design-sheet.png")
 
-    # animation: one full flap cycle, rear and three-quarter view
-    gw, gh, frames = 330, 330, 24
-    gif = []
-    for k in range(frames):
-        t = 2 * math.pi * k / frames
-        frame = Image.new("RGBA", (gw * 3, gh * 2), (16, 18, 22, 255))
-        for n, d in enumerate(wings):
-            tint = hex_rgb(d.default_color)
-            for row, phi in enumerate((0.0, math.radians(38))):
-                frame.alpha_composite(render(d, t / d.speed, 0.0, (gw, gh), scales[d.id] * gw / pw, phi, tint=tint,
-                                             cy_frac=0.42), (n * gw, row * gh))
-        gif.append(frame.convert("RGB").quantize(colors=96, method=Image.MEDIANCUT, dither=Image.NONE))
-    gif[0].save("previews/wings-animated.gif", save_all=True, append_images=gif[1:], duration=60, loop=0, optimize=True)
+    # animation: one full flap cycle, rear and three-quarter view; idle (breathing) and walking (full flap)
+    gw, gh, frames = 330, 330, 36
+    for name, move in (("wings-animated.gif", 0.0), ("wings-walking.gif", 1.0)):
+        gif = []
+        for k in range(frames):
+            t = 2 * math.pi * k / frames
+            frame = Image.new("RGBA", (gw * 3, gh * 2), (16, 18, 22, 255))
+            for n, d in enumerate(wings):
+                tint = hex_rgb(d.default_color)
+                for row, phi in enumerate((0.0, math.radians(38))):
+                    frame.alpha_composite(render(d, t / d.speed, move, (gw, gh), scales[d.id] * gw / pw, phi, tint=tint,
+                                                 cy_frac=0.42), (n * gw, row * gh))
+            gif.append(frame.convert("RGB").quantize(colors=96, method=Image.MEDIANCUT, dither=Image.NONE))
+        gif[0].save(f"previews/{name}", save_all=True, append_images=gif[1:], duration=45, loop=0, optimize=True)
 
 
 if __name__ == "__main__":

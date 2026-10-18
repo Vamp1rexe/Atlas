@@ -41,7 +41,7 @@ class CosmeticModelTest {
 			int q = quads(m.roots());
 			System.out.println("cosmetic " + id + ": " + bones(m.roots()) + " bones, " + q + " quads");
 			assertTrue(q > 0, id + " has no geometry");
-			assertTrue(q < 4000, id + " is too heavy: " + q + " quads");
+			assertTrue(q < 6500, id + " is too heavy: " + q + " quads");
 			checked++;
 		}
 		assertTrue(checked >= 5, "catalog is missing entries");

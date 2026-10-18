@@ -6,7 +6,7 @@ Ein Cosmetic besteht aus Modell, Textur, Vorschau und einem Eintrag in `catalog.
 python3 cosmetics/tools/gen_cosmetics.py
 ```
 
-Das Skript schreibt Modelle, Texturen, Previews, `catalog.json`, `previews/design-sheet.png` (Ruhepose von hinten und schräg) und `previews/wings-animated.gif` (ein voller Flügelschlag). Die Vorschauen rechnen dieselbe Knochen- und Rotationsmathematik wie der Mod, zeigen also den echten Schlag. Das Skript bricht ab, wenn ein Cosmetic über dem Quad-Budget (3500) liegt. Ein neues Cosmetic ist eine Funktion, die ein `Design` zurückgibt, plus ein Eintrag in `DESIGNS`.
+Das Skript schreibt Modelle, Texturen, Previews, `catalog.json`, `previews/design-sheet.png` (Ruhepose von hinten und schräg) und `previews/wings-animated.gif` und `wings-walking.gif` (ein voller Flügelschlag, stehend und laufend). Die Vorschauen rechnen dieselbe Knochen- und Rotationsmathematik wie der Mod, zeigen also den echten Schlag. Das Skript bricht ab, wenn ein Cosmetic über dem Quad-Budget (6000) liegt. Ein neues Cosmetic ist eine Funktion, die ein `Design` zurückgibt, plus ein Eintrag in `DESIGNS`.
 
 ## catalog.json
 
