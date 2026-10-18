@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "cosmetics": [
+    {
+      "id": "halo",
+      "name": "Halo",
+      "slot": "hat",
+      "rarity": "rare",
+      "description": "Goldener Ring, der leicht über dem Kopf schwebt.",
+      "model": "models/halo.json",
+      "texture": "textures/halo.png",
+      "preview": "previews/halo.png"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+[package]
+name = "atlas-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+flate2 = "1"
+tar = "0.4"
+dirs = "5"
+futures = "0.3"
+md-5 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+hex = "0.4"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "process", "sync", "time"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
