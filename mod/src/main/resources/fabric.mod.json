@@ -1,0 +1,20 @@
+{
+	"schemaVersion": 1,
+	"id": "atlas_cosmetics",
+	"version": "${version}",
+	"name": "Atlas Cosmetics",
+	"description": "Draws the cosmetics equipped in the Atlas launcher.",
+	"authors": ["Atlas"],
+	"license": "MIT",
+	"icon": "assets/atlas_cosmetics/icon.png",
+	"environment": "client",
+	"entrypoints": {
+		"client": ["dev.atlas.cosmetics.AtlasCosmeticsClient"]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.5",
+		"minecraft": "~26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
