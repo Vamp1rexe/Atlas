@@ -32,6 +32,46 @@ function h(tag, props = {}, ...kids) {
 
 const compact = new Intl.NumberFormat("de-DE", { notation: "compact" });
 
+const HEX = /^#[0-9a-fA-F]{6}$/;
+const THEME_PRESETS = [
+  ["Atlas", "#1bd96a", "#16181c"],
+  ["Ozean", "#4c8dff", "#10151f"],
+  ["Violett", "#a366ff", "#14111c"],
+  ["Rubin", "#ff4d5e", "#1a1214"],
+  ["Sonne", "#ff9a3d", "#17140f"],
+  ["Mono", "#e8e8e8", "#101010"],
+];
+
+function applyTheme(s) {
+  if (!HEX.test(s.theme_accent) || !HEX.test(s.theme_bg)) return;
+  const r = document.documentElement.style;
+  r.setProperty("--bg", s.theme_bg);
+  r.setProperty("--panel", `color-mix(in srgb, ${s.theme_bg} 90%, white)`);
+  r.setProperty("--panel-2", `color-mix(in srgb, ${s.theme_bg} 80%, white)`);
+  r.setProperty("--line", `color-mix(in srgb, ${s.theme_bg} 72%, white)`);
+  r.setProperty("--accent", s.theme_accent);
+  const n = parseInt(s.theme_accent.slice(1), 16);
+  const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  r.setProperty("--accent-ink", lum > 0.55 ? "#07120b" : "#ffffff");
+}
+
+/** Color picker and hex text field kept in sync. */
+function colorField(value, onChange) {
+  const picker = h("input", { type: "color", value: HEX.test(value) ? value : "#ffffff" });
+  const text = h("input", { type: "text", value, placeholder: "#rrggbb", maxlength: "7", style: "width:96px" });
+  picker.addEventListener("input", () => {
+    text.value = picker.value;
+    onChange(picker.value);
+  });
+  text.addEventListener("input", () => {
+    if (HEX.test(text.value)) {
+      picker.value = text.value;
+      onChange(text.value);
+    }
+  });
+  return h("div", { class: "row", style: "gap:8px" }, picker, text);
+}
+
 function toast(msg, isErr = false) {
   const t = h("div", { class: "toast" + (isErr ? " err" : "") }, msg);
   $("#toasts").append(t);
@@ -167,6 +207,7 @@ async function viewLibrary() {
           "div",
           { class: "row" },
           h("button", { class: "btn primary", disabled: busy || running, onclick: () => play(i.id) }, busy ? "Startet…" : running ? "Läuft" : "Spielen"),
+          i.loader === "fabric" ? h("button", { class: "btn small", onclick: (e) => perfPack(i, e.currentTarget) }, "Performance") : "",
           h("button", { class: "btn small", onclick: () => toggleLog(i.id) }, "Log"),
           h("button", { class: "btn small danger", onclick: () => removeInstance(i) }, "Löschen")
         ),
@@ -197,6 +238,19 @@ async function play(id) {
     state.starting.delete(id);
     if (state.view === "library") render();
   }
+}
+
+async function perfPack(i, btn) {
+  btn.disabled = true;
+  btn.textContent = "Installiere…";
+  try {
+    const r = await invoke("install_performance_pack", { instanceId: i.id });
+    toast(`Performance-Pack: ${r.installed.length} Datei(en) installiert` + (r.skipped.length ? `, übersprungen (keine Version für ${i.mc_version}): ${r.skipped.join(", ")}` : "."));
+  } catch (e) {
+    toast(String(e), true);
+  }
+  btn.disabled = false;
+  btn.textContent = "Performance";
 }
 
 async function removeInstance(i) {
@@ -370,17 +424,22 @@ async function install(hit, btn) {
 }
 
 // ---------- cosmetics ----------
+const SLOT_LABEL = { hat: "Hut", back: "Rücken", cape: "Cape", wings: "Flügel", face: "Gesicht", pet: "Begleiter" };
+const RARITY_LABEL = { common: "Gewöhnlich", rare: "Selten", epic: "Episch", legendary: "Legendär", custom: "Eigene" };
+
 async function viewCosmetics() {
   state.cosmetics = await call("cosmetics_list");
+  state.settings = await call("get_settings");
+  const opts = state.settings.cosmetic_options ?? {};
   const root = h("div");
   root.append(
     h(
       "div",
       { class: "row between" },
-      h("div", {}, h("h1", {}, "Cosmetics"), h("p", { class: "sub" }, "Pro Slot ein Cosmetic. Der Katalog wächst über Updates.")),
-      h("button", { class: "btn", onclick: syncCosmetics }, "Synchronisieren")
+      h("div", {}, h("h1", {}, "Cosmetics"), h("p", { class: "sub" }, "Pro Slot ein Cosmetic. Größe und Farbe passt du pro Stück an.")),
+      h("div", { class: "row" }, h("button", { class: "btn primary", onclick: openCapeModal }, "+ Cape aus Bild"), h("button", { class: "btn", onclick: syncCosmetics }, "Synchronisieren"))
     ),
-    h("div", { class: "banner" }, "Ausgerüstete Cosmetics zeichnet der Atlas-Cosmetics-Mod im Spiel (Fabric, Minecraft 26.2). Atlas installiert ihn beim Start automatisch. Du siehst sie nur selbst.")
+    h("div", { class: "banner" }, "Der Atlas-Cosmetics-Mod zeichnet sie im Spiel (Fabric, Minecraft 26.2) und wird beim Start automatisch installiert. Änderungen gelten ab dem nächsten Spielstart. Du siehst sie nur selbst.")
   );
   const list = state.cosmetics.catalog.cosmetics;
   if (!list.length) {
@@ -390,14 +449,36 @@ async function viewCosmetics() {
   const grid = h("div", { class: "grid" });
   for (const c of list) {
     const on = state.cosmetics.equipped.includes(c.id);
+    const o = opts[c.id] ?? { scale: 1, color: "" };
+    const save = (patch) => {
+      Object.assign(o, patch);
+      opts[c.id] = o;
+      invoke("cosmetics_set_option", { id: c.id, scale: o.scale, color: o.color ?? "" }).catch((e) => toast(String(e), true));
+    };
+    const label = h("span", { class: "meta" }, `Größe ${Math.round((o.scale ?? 1) * 100)} %`);
+    const range = h("input", { type: "range", min: "0.5", max: "2", step: "0.05", value: String(o.scale ?? 1) });
+    range.addEventListener("input", () => (label.textContent = `Größe ${Math.round(range.value * 100)} %`));
+    range.addEventListener("change", () => save({ scale: Number(range.value) }));
     grid.append(
       h(
         "div",
         { class: "card cos-card" + (on ? " equipped" : "") },
         c.preview_data ? h("img", { class: "cos-preview", src: c.preview_data, alt: "" }) : h("div", { class: "cos-preview" }),
-        h("div", { class: "row between" }, h("h3", {}, c.name), h("span", { class: "tag " + c.rarity }, c.rarity)),
-        h("div", { class: "meta" }, `${c.slot}${c.description ? " · " + c.description : ""}`),
-        h("button", { class: "btn " + (on ? "" : "primary"), onclick: async () => { await call(on ? "cosmetics_unequip" : "cosmetics_equip", { id: c.id }); render(); } }, on ? "Ablegen" : "Ausrüsten")
+        h("div", { class: "row between" }, h("h3", {}, c.name), h("span", { class: "tag " + c.rarity }, RARITY_LABEL[c.rarity] ?? c.rarity)),
+        h("div", { class: "meta" }, `${SLOT_LABEL[c.slot] ?? c.slot}${c.description ? " · " + c.description : ""}`),
+        h(
+          "details",
+          { class: "opts" },
+          h("summary", {}, "Anpassen"),
+          h("div", { class: "opt" }, label, range),
+          h("div", { class: "opt" }, h("span", { class: "meta" }, "Farbe"), colorField(o.color || c.default_color || "#ffffff", (v) => save({ color: v })))
+        ),
+        h(
+          "div",
+          { class: "row" },
+          h("button", { class: "btn " + (on ? "" : "primary"), onclick: async () => { await call(on ? "cosmetics_unequip" : "cosmetics_equip", { id: c.id }); render(); } }, on ? "Ablegen" : "Ausrüsten"),
+          c.custom ? h("button", { class: "btn small danger", onclick: async () => { if (confirm(`„${c.name}“ löschen?`)) { await call("cosmetics_delete", { id: c.id }); render(); } } }, "Löschen") : ""
+        )
       )
     );
   }
@@ -415,20 +496,151 @@ async function syncCosmetics() {
   render();
 }
 
+/** Cape from an image: pick a file, pan and zoom it under the cape frame, save. */
+function openCapeModal() {
+  const FW = 250, FH = 400; // cape frame, 10:16
+  const OUT_W = 30, OUT_H = 48;
+  let img = null, zoom = 1, ox = 0, oy = 0, cover = 1;
+
+  const frame = h("canvas", { width: String(FW), height: String(FH), class: "crop-frame" });
+  const small = h("canvas", { width: String(OUT_W * 4), height: String(OUT_H * 4), class: "crop-small" });
+  const ctx = frame.getContext("2d");
+  const sctx = small.getContext("2d");
+  const tiny = document.createElement("canvas");
+  tiny.width = OUT_W;
+  tiny.height = OUT_H;
+  const tctx = tiny.getContext("2d");
+
+  const clamp = () => {
+    const s = cover * zoom;
+    ox = Math.min(0, Math.max(FW - img.width * s, ox));
+    oy = Math.min(0, Math.max(FH - img.height * s, oy));
+  };
+  const draw = () => {
+    ctx.fillStyle = "#0e0f12";
+    ctx.fillRect(0, 0, FW, FH);
+    if (!img) return;
+    clamp();
+    const s = cover * zoom;
+    ctx.drawImage(img, ox, oy, img.width * s, img.height * s);
+    tctx.imageSmoothingQuality = "high";
+    tctx.clearRect(0, 0, OUT_W, OUT_H);
+    tctx.drawImage(img, -ox / s, -oy / s, FW / s, FH / s, 0, 0, OUT_W, OUT_H);
+    sctx.imageSmoothingEnabled = false;
+    sctx.clearRect(0, 0, small.width, small.height);
+    sctx.drawImage(tiny, 0, 0, small.width, small.height);
+  };
+
+  let drag = null;
+  frame.addEventListener("pointerdown", (e) => { if (!img) return; drag = { x: e.clientX, y: e.clientY, ox, oy }; frame.setPointerCapture(e.pointerId); });
+  frame.addEventListener("pointermove", (e) => { if (!drag) return; ox = drag.ox + (e.clientX - drag.x); oy = drag.oy + (e.clientY - drag.y); draw(); });
+  frame.addEventListener("pointerup", () => (drag = null));
+
+  const zoomInput = h("input", { type: "range", min: "1", max: "4", step: "0.02", value: "1", disabled: true });
+  zoomInput.addEventListener("input", () => {
+    const before = cover * zoom;
+    const cx = (FW / 2 - ox) / before, cy = (FH / 2 - oy) / before; // keep the center point fixed
+    zoom = Number(zoomInput.value);
+    const s = cover * zoom;
+    ox = FW / 2 - cx * s;
+    oy = FH / 2 - cy * s;
+    draw();
+  });
+
+  const file = h("input", { type: "file", accept: "image/*" });
+  file.addEventListener("change", () => {
+    const f = file.files[0];
+    if (!f) return;
+    const url = URL.createObjectURL(f);
+    const im = new Image();
+    im.onload = () => {
+      img = im;
+      cover = Math.max(FW / im.width, FH / im.height);
+      zoom = 1;
+      zoomInput.value = "1";
+      zoomInput.disabled = false;
+      ox = (FW - im.width * cover) / 2;
+      oy = (FH - im.height * cover) / 2;
+      if (!name.value) name.value = f.name.replace(/\.[^.]+$/, "").slice(0, 24);
+      draw();
+      URL.revokeObjectURL(url);
+    };
+    im.onerror = () => toast("Das Bild konnte nicht geladen werden.", true);
+    im.src = url;
+  });
+
+  const name = h("input", { type: "text", placeholder: "Name des Capes", maxlength: "24" });
+  const close = () => $("#modal-root").replaceChildren();
+  const save = h("button", {
+    class: "btn primary",
+    onclick: async () => {
+      if (!img) return toast("Wähle zuerst ein Bild.", true);
+      draw();
+      const png = tiny.toDataURL("image/png").split(",")[1];
+      try {
+        await invoke("cosmetics_add_cape", { name: name.value, png });
+        toast("Cape zur Bibliothek hinzugefügt.");
+        close();
+        render();
+      } catch (e) {
+        toast(String(e), true);
+      }
+    },
+  }, "Zur Bibliothek hinzufügen");
+
+  draw();
+  $("#modal-root").replaceChildren(
+    h("div", { class: "modal-bg", onclick: (e) => e.target.classList.contains("modal-bg") && close() },
+      h("div", { class: "modal wide" },
+        h("h2", {}, "Cape aus Bild"),
+        h("p", { class: "meta", style: "margin:-8px 0 14px" }, "Bild wählen, mit der Maus verschieben und zoomen. Der Ausschnitt im Rahmen wird das Cape."),
+        h("div", { class: "crop-row" },
+          h("div", {}, frame, h("label", { class: "field", style: "margin:10px 0 0" }, "Zoom", zoomInput)),
+          h("div", { class: "crop-side" }, h("span", { class: "meta" }, "So sieht das Cape aus (30×48)"), small)
+        ),
+        h("label", { class: "field", style: "margin-top:14px" }, "Bild", file),
+        h("label", { class: "field" }, "Name", name),
+        h("div", { class: "row between" }, h("button", { class: "btn", onclick: close }, "Abbrechen"), save)
+      )
+    )
+  );
+}
+
 // ---------- settings ----------
 async function viewSettings() {
   const s = (state.settings = await call("get_settings"));
+  const draft = { ...s };
   const username = h("input", { type: "text", value: s.username });
   const ram = h("input", { type: "number", min: "1024", max: "32768", step: "512", value: String(s.ram_mb) });
   const java = h("input", { type: "text", value: s.java_path, placeholder: "Leer lassen: Atlas lädt passendes Java selbst" });
   const url = h("input", { type: "text", value: s.cosmetics_url });
+  const perf = h("input", { type: "checkbox", checked: s.perf_flags });
+  perf.checked = s.perf_flags;
+
+  const themeBox = h("div");
+  const drawTheme = () => {
+    themeBox.replaceChildren(
+      h("div", { class: "row", style: "margin-bottom:12px" },
+        THEME_PRESETS.map(([n, a, b]) => h("button", { class: "chip", onclick: () => { draft.theme_accent = a; draft.theme_bg = b; applyTheme(draft); drawTheme(); } },
+          h("span", { class: "dot", style: `background:${a}` }), h("span", { class: "dot", style: `background:${b}` }), n))),
+      h("div", { class: "row", style: "gap:24px" },
+        h("label", { class: "field" }, "Akzentfarbe", colorField(draft.theme_accent, (v) => { draft.theme_accent = v; applyTheme(draft); })),
+        h("label", { class: "field" }, "Hintergrund", colorField(draft.theme_bg, (v) => { draft.theme_bg = v; applyTheme(draft); })))
+    );
+  };
+  drawTheme();
+
   return h(
     "div",
-    { style: "max-width:520px" },
+    { style: "max-width:560px" },
     h("h1", {}, "Einstellungen"),
     h("p", { class: "sub" }, "Offline-Modus: Der Name gilt nur lokal und auf Offline-Servern. Microsoft-Login folgt."),
+    h("h3", { class: "section" }, "Design"),
+    themeBox,
+    h("h3", { class: "section" }, "Spiel"),
     h("label", { class: "field" }, "Spielername", username),
     h("label", { class: "field" }, "Arbeitsspeicher (MB)", ram),
+    h("label", { class: "check" }, perf, h("span", {}, "Optimierte Java-Flags für gleichmäßigere FPS")),
     h("label", { class: "field" }, "Java-Pfad (optional)", java),
     h("label", { class: "field" }, "Cosmetics-Quelle", url),
     h(
@@ -436,9 +648,10 @@ async function viewSettings() {
       {
         class: "btn primary",
         onclick: async () => {
-          const next = { ...s, username: username.value.trim(), ram_mb: Number(ram.value) || 4096, java_path: java.value.trim(), cosmetics_url: url.value.trim() };
+          const next = { ...s, ...draft, username: username.value.trim(), ram_mb: Number(ram.value) || 4096, java_path: java.value.trim(), cosmetics_url: url.value.trim(), perf_flags: perf.checked };
           await call("save_settings", { settings: next });
           state.settings = next;
+          applyTheme(next);
           renderNav();
           toast("Gespeichert.");
         },
@@ -451,5 +664,6 @@ async function viewSettings() {
 // ---------- boot ----------
 (async () => {
   state.settings = await invoke("get_settings");
+  applyTheme(state.settings);
   render();
 })();

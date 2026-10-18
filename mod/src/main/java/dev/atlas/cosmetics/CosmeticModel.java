@@ -137,10 +137,10 @@ record CosmeticModel(String id, String attach, float ox, float oy, float oz, flo
 		}
 
 		// face: origin, texel axis S, texel axis T, extent along S and T, shade
-		if (uv[0] != null) face(out, tex, tint, x0, y0, z0, 0, 0, 1, 0, 1, 0, d, h, uv[0], 0.6f);
-		if (uv[1] != null) face(out, tex, tint, x1, y0, z0, -1, 0, 0, 0, 1, 0, w, h, uv[1], 0.8f);
-		if (uv[2] != null) face(out, tex, tint, x1, y0, z1, 0, 0, -1, 0, 1, 0, d, h, uv[2], 0.6f);
-		if (uv[3] != null) face(out, tex, tint, x0, y0, z1, 1, 0, 0, 0, 1, 0, w, h, uv[3], 0.8f);
+		if (uv[0] != null) face(out, tex, tint, x0, y0, z1, 0, 0, -1, 0, 1, 0, d, h, uv[0], 0.6f);
+		if (uv[1] != null) face(out, tex, tint, x0, y0, z0, 1, 0, 0, 0, 1, 0, w, h, uv[1], 0.8f);
+		if (uv[2] != null) face(out, tex, tint, x1, y0, z0, 0, 0, 1, 0, 1, 0, d, h, uv[2], 0.6f);
+		if (uv[3] != null) face(out, tex, tint, x1, y0, z1, -1, 0, 0, 0, 1, 0, w, h, uv[3], 0.8f);
 		if (uv[4] != null) face(out, tex, tint, x0, y0, z0, 1, 0, 0, 0, 0, 1, w, d, uv[4], 1.0f);
 		if (uv[5] != null) face(out, tex, tint, x0, y1, z1, 1, 0, 0, 0, 0, -1, w, d, uv[5], 0.5f);
 	}

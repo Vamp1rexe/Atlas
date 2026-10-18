@@ -4,7 +4,9 @@ Minecraft-Launcher im Stil des Modrinth-Launchers, mit eigenem Cosmetics-System.
 
 - **Bibliothek:** Instanzen für Vanilla und Fabric, Start per Klick. Atlas lädt Minecraft, Bibliotheken, Assets und das passende Java selbst.
 - **Entdecken:** Mods, Modpacks (`.mrpack`), Resource Packs und Shader direkt über die Modrinth-API, inklusive benötigter Abhängigkeiten.
-- **Cosmetics:** Katalog aus Modell-, Textur- und Preview-Dateien. Siehe [`cosmetics/README.md`](cosmetics/README.md).
+- **Cosmetics:** animierte Flügel (Engel, Dämon, Drache), wehende Capes, eigene Capes aus Bildern, Größe und Farbe einstellbar. Siehe [`cosmetics/README.md`](cosmetics/README.md).
+- **Performance:** optimierte JVM-Flags und ein Performance-Pack (Sodium, Lithium, FerriteCore, Entity Culling, ImmediatelyFast, ModernFix) für Fabric-Instanzen.
+- **Design:** Akzent- und Hintergrundfarbe per Hexcode oder Preset.
 - **Account:** vorerst nur Offline-Modus. Der Microsoft-Login kommt als Nächstes.
 
 ## Aufbau

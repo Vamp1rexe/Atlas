@@ -5,8 +5,8 @@ use atlas_core::{
     cosmetics::{self, Catalog},
     instances::{self, Instance},
     launch::{self, LaunchOptions},
-    modrinth::{self, SearchResult},
-    settings::{self, Settings},
+    modrinth::{self, PackResult, SearchResult},
+    settings::{self, CosmeticOption, Settings},
     versions::{self, VersionEntry},
     ProgressFn,
 };
@@ -35,6 +35,9 @@ fn get_settings() -> Settings {
 #[tauri::command]
 fn save_settings(settings: Settings) -> R<()> {
     Account::offline(&settings.username).map_err(err)?;
+    if !settings::valid_hex(&settings.theme_accent) || !settings::valid_hex(&settings.theme_bg) {
+        return Err("Farben müssen im Format #rrggbb sein".into());
+    }
     settings::save(&settings).map_err(err)
 }
 
@@ -74,7 +77,12 @@ async fn play(app: AppHandle, id: String) -> R<u32> {
         java_path: s.java_path,
         equipped: s.equipped,
         cosmetics_mod_url: s.cosmetics_mod_url,
+        perf_flags: s.perf_flags,
     };
+
+    // The mod reads the merged catalog and the per-cosmetic options at startup.
+    cosmetics::write_merged().map_err(err)?;
+    cosmetics::write_options(&s.cosmetic_options).map_err(err)?;
 
     let log_app = app.clone();
     let log_id = id.clone();
@@ -162,6 +170,44 @@ fn cosmetics_unequip(id: String) -> R<Vec<String>> {
     Ok(s.equipped)
 }
 
+#[tauri::command]
+fn cosmetics_set_option(id: String, scale: f32, color: String) -> R<()> {
+    if !color.is_empty() && !settings::valid_hex(&color) {
+        return Err("Farbe muss #rrggbb sein".into());
+    }
+    let mut s = settings::load();
+    s.cosmetic_options.insert(
+        id,
+        CosmeticOption {
+            scale: scale.clamp(0.3, 3.0),
+            color,
+        },
+    );
+    settings::save(&s).map_err(err)
+}
+
+#[tauri::command]
+fn cosmetics_add_cape(name: String, png: String) -> R<cosmetics::Cosmetic> {
+    cosmetics::add_cape(&name, &png).map_err(err)
+}
+
+#[tauri::command]
+fn cosmetics_delete(id: String) -> R<()> {
+    cosmetics::delete_custom(&id).map_err(err)?;
+    let mut s = settings::load();
+    s.equipped.retain(|e| e != &id);
+    s.cosmetic_options.remove(&id);
+    settings::save(&s).map_err(err)
+}
+
+#[tauri::command]
+async fn install_performance_pack(app: AppHandle, instance_id: String) -> R<PackResult> {
+    let inst = instances::get(&instance_id).map_err(err)?;
+    modrinth::install_performance_pack(&inst, &progress_fn(&app))
+        .await
+        .map_err(err)
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -179,6 +225,10 @@ fn main() {
             cosmetics_sync,
             cosmetics_equip,
             cosmetics_unequip,
+            cosmetics_set_option,
+            cosmetics_add_cape,
+            cosmetics_delete,
+            install_performance_pack,
         ])
         .run(tauri::generate_context!())
         .expect("Atlas konnte nicht gestartet werden");

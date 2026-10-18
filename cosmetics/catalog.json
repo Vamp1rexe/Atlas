@@ -10,6 +10,50 @@
       "model": "models/halo.json",
       "texture": "textures/halo.png",
       "preview": "previews/halo.png"
+    },
+    {
+      "id": "wings_angel",
+      "name": "Engelsflügel",
+      "slot": "wings",
+      "rarity": "epic",
+      "description": "Weiße Federflügel, die ruhig schlagen.",
+      "model": "models/wings_angel.json",
+      "texture": "textures/wings_angel.png",
+      "preview": "previews/wings_angel.png",
+      "default_color": "#ffffff"
+    },
+    {
+      "id": "wings_demon",
+      "name": "Dämonenflügel",
+      "slot": "wings",
+      "rarity": "epic",
+      "description": "Zerfetzte Fledermausflügel mit Krallen.",
+      "model": "models/wings_demon.json",
+      "texture": "textures/wings_demon.png",
+      "preview": "previews/wings_demon.png",
+      "default_color": "#c4161c"
+    },
+    {
+      "id": "wings_dragon",
+      "name": "Drachenflügel",
+      "slot": "wings",
+      "rarity": "legendary",
+      "description": "Riesige Schuppenflügel mit Stacheln.",
+      "model": "models/wings_dragon.json",
+      "texture": "textures/wings_dragon.png",
+      "preview": "previews/wings_dragon.png",
+      "default_color": "#3aa655"
+    },
+    {
+      "id": "cape_atlas",
+      "name": "Atlas-Cape",
+      "slot": "cape",
+      "rarity": "common",
+      "description": "Wehendes Cape mit Atlas-Globus.",
+      "model": "models/cape_atlas.json",
+      "texture": "textures/cape_atlas.png",
+      "preview": "previews/cape_atlas.png",
+      "default_color": "#ffffff"
     }
   ]
 }

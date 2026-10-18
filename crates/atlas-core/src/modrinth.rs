@@ -251,3 +251,37 @@ pub async fn install_modpack(project_id: &str, progress: &ProgressFn) -> Result<
 
     Ok(inst)
 }
+
+/// Mods that raise FPS on Fabric. Each one is optional: anything without a build
+/// for the instance's Minecraft version is skipped, not an error.
+pub const PERFORMANCE_PACK: &[&str] = &[
+    "sodium",
+    "lithium",
+    "ferrite-core",
+    "entityculling",
+    "immediatelyfast",
+    "modernfix",
+];
+
+#[derive(Serialize)]
+pub struct PackResult {
+    pub installed: Vec<String>,
+    pub skipped: Vec<String>,
+}
+
+pub async fn install_performance_pack(inst: &Instance, progress: &ProgressFn) -> Result<PackResult> {
+    if inst.loader != "fabric" {
+        bail!("Das Performance-Pack braucht eine Fabric-Instanz.");
+    }
+    let mut result = PackResult {
+        installed: vec![],
+        skipped: vec![],
+    };
+    for slug in PERFORMANCE_PACK {
+        match install_project(slug, "mod", inst, progress).await {
+            Ok(files) => result.installed.extend(files),
+            Err(_) => result.skipped.push((*slug).to_string()),
+        }
+    }
+    Ok(result)
+}

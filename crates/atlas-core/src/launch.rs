@@ -15,6 +15,7 @@ pub struct LaunchOptions {
     pub java_path: String,
     pub equipped: Vec<String>,
     pub cosmetics_mod_url: String,
+    pub perf_flags: bool,
 }
 
 pub type LogFn = Arc<dyn Fn(String) + Send + Sync>;
@@ -101,7 +102,26 @@ pub async fn launch(
     vars.insert("launcher_version", env!("CARGO_PKG_VERSION").into());
 
     let ram = inst.ram_mb.unwrap_or(opts.ram_mb);
-    let mut args: Vec<String> = vec![format!("-Xmx{ram}M"), format!("-Xms{}M", (ram / 4).max(512))];
+    let xms = if opts.perf_flags { ram / 2 } else { ram / 4 };
+    let mut args: Vec<String> = vec![format!("-Xmx{ram}M"), format!("-Xms{}M", xms.max(512))];
+    if opts.perf_flags {
+        // G1 tuned for short, even frame times instead of server throughput.
+        args.extend(
+            [
+                "-XX:+UseG1GC",
+                "-XX:MaxGCPauseMillis=40",
+                "-XX:G1NewSizePercent=30",
+                "-XX:G1MaxNewSizePercent=50",
+                "-XX:G1HeapRegionSize=16M",
+                "-XX:G1ReservePercent=15",
+                "-XX:InitiatingHeapOccupancyPercent=20",
+                "-XX:+ParallelRefProcEnabled",
+                "-XX:+DisableExplicitGC",
+                "-XX:+PerfDisableSharedMem",
+            ]
+            .map(String::from),
+        );
+    }
 
     // JVM args: modern versions list them (incl. -cp); old ones need the defaults.
     let jvm = prep.version.get("arguments").and_then(|a| a.get("jvm"));
@@ -116,6 +136,7 @@ pub async fn launch(
     // Hand the cosmetics to the in-game mod.
     args.push(format!("-Datlas.cosmetics.dir={}", cosmetics::files_dir().display()));
     args.push(format!("-Datlas.cosmetics.catalog={}", cosmetics::catalog_file().display()));
+    args.push(format!("-Datlas.options={}", cosmetics::options_file().display()));
     args.push(format!("-Datlas.equipped={}", opts.equipped.join(",")));
     args.push(format!("-Datlas.account.uuid={}", opts.account.uuid));
 
