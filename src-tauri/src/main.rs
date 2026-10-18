@@ -73,6 +73,7 @@ async fn play(app: AppHandle, id: String) -> R<u32> {
         ram_mb: s.ram_mb,
         java_path: s.java_path,
         equipped: s.equipped,
+        cosmetics_mod_url: s.cosmetics_mod_url,
     };
 
     let log_app = app.clone();

@@ -40,11 +40,12 @@ Ein Cosmetic besteht aus drei Dateien plus einem Eintrag in `catalog.json`:
 }
 ```
 
-- Einheiten sind Pixel (1/16 Block), Ursprung ist der Mittelpunkt des `attach`-Punkts (`head`, `body`, `back`).
-- `animation` ist optional: `bob` (auf und ab), `spin` (drehen), `flap` (Flügelschlag).
+- Einheiten sind Pixel (1/16 Block), y zeigt nach unten (wie in Minecraft-Modellen). `attach` ist `head` (Ursprung am Hals, Kopf reicht bis y = -8, x/z ±4) oder `body` (Ursprung oben in der Körpermitte, Körper ±4 breit, ±2 tief). `offset` verschiebt relativ dazu.
+- `animation` ist optional: `bob` (auf und ab, `amount` in Pixeln) und `spin` (um die Hochachse, `speed` in rad/s).
+- Die Textur wird texelweise abgetastet (ein Quad pro nicht transparentem Texel), Seiten werden leicht abgedunkelt. Beleuchtung und Halbtransparenz sind noch nicht umgesetzt. Die UV-Orientierung der Seiten ist noch nicht im Spiel gegengeprüft, asymmetrische Texturen können gespiegelt erscheinen.
 
 ## Ablauf
 
 1. Der Launcher synchronisiert den Katalog und die Dateien nach `%APPDATA%\Atlas\cosmetics`.
 2. Beim Start übergibt er dem Spiel `-Datlas.cosmetics.dir`, `-Datlas.cosmetics.catalog` und `-Datlas.equipped=<ids>`.
-3. Der Atlas-Cosmetics-Mod (Fabric, noch nicht gebaut) liest diese Werte und zeichnet die Modelle am Spieler.
+3. Der Atlas-Cosmetics-Mod (`mod/`, Fabric, Minecraft 26.2) liest diese Werte und zeichnet die Modelle am lokalen Spieler. Der Launcher installiert ihn samt Fabric API automatisch, sobald ein Cosmetic ausgerüstet ist.

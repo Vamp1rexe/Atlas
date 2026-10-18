@@ -1,6 +1,8 @@
 //! Cosmetics catalog. The launcher only manages files and the equipped set;
 //! the in-game Atlas Cosmetics mod renders them (see cosmetics/README.md).
 
+use crate::instances::{self, Instance};
+use crate::modrinth;
 use crate::net::{self, DlItem, ProgressFn};
 use crate::paths;
 use anyhow::Result;
@@ -124,4 +126,34 @@ pub fn equip(equipped: &[String], id: &str) -> Vec<String> {
         .collect();
     out.push(id.to_string());
     out
+}
+
+/// Minecraft versions the Atlas Cosmetics mod is built for.
+pub fn mod_supports(mc_version: &str) -> bool {
+    mc_version == "26.2" || mc_version.starts_with("26.2.")
+}
+
+/// Puts the Atlas Cosmetics mod (and the Fabric API it needs) into an instance.
+pub async fn ensure_mod(inst: &Instance, mod_url: &str, progress: &ProgressFn) -> Result<()> {
+    let mods = instances::dir(&inst.id).join("mods");
+    std::fs::create_dir_all(&mods)?;
+    let target = mods.join("atlas-cosmetics.jar");
+
+    if !target.exists() {
+        // A jar placed in %APPDATA%\Atlas\mods wins over the download (handy for local builds).
+        let local = paths::root().join("mods").join("atlas-cosmetics.jar");
+        if local.exists() {
+            std::fs::copy(&local, &target)?;
+        } else {
+            net::download(mod_url, &target, None).await?;
+        }
+    }
+
+    let has_api = std::fs::read_dir(&mods)?
+        .filter_map(|e| e.ok())
+        .any(|e| e.file_name().to_string_lossy().starts_with("fabric-api"));
+    if !has_api {
+        modrinth::install_project("fabric-api", "mod", inst, progress).await?;
+    }
+    Ok(())
 }

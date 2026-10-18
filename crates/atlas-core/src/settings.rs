@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_COSMETICS_URL: &str =
     "https://raw.githubusercontent.com/Vamp1rexe/Atlas/main/cosmetics";
+pub const DEFAULT_COSMETICS_MOD_URL: &str =
+    "https://github.com/Vamp1rexe/Atlas/releases/latest/download/atlas-cosmetics.jar";
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -12,6 +14,7 @@ pub struct Settings {
     pub ram_mb: u32,
     pub java_path: String,
     pub cosmetics_url: String,
+    pub cosmetics_mod_url: String,
     pub equipped: Vec<String>,
 }
 
@@ -22,6 +25,7 @@ impl Default for Settings {
             ram_mb: 4096,
             java_path: String::new(),
             cosmetics_url: DEFAULT_COSMETICS_URL.into(),
+            cosmetics_mod_url: DEFAULT_COSMETICS_MOD_URL.into(),
             equipped: vec![],
         }
     }

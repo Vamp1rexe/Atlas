@@ -14,6 +14,7 @@ pub struct LaunchOptions {
     pub ram_mb: u32,
     pub java_path: String,
     pub equipped: Vec<String>,
+    pub cosmetics_mod_url: String,
 }
 
 pub type LogFn = Arc<dyn Fn(String) + Send + Sync>;
@@ -59,6 +60,11 @@ pub async fn launch(
     log: LogFn,
     on_exit: ExitFn,
 ) -> Result<u32> {
+    if inst.loader == "fabric" && cosmetics::mod_supports(&inst.mc_version) && !opts.equipped.is_empty() {
+        if let Err(e) = cosmetics::ensure_mod(inst, &opts.cosmetics_mod_url, &progress).await {
+            log(format!("[Atlas] Cosmetics-Mod konnte nicht installiert werden: {e:#}"));
+        }
+    }
     let prep = versions::prepare(inst, &progress).await?;
     let java_bin = java::resolve(prep.java_major, &opts.java_path, &progress).await?;
 

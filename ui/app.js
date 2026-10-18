@@ -380,7 +380,7 @@ async function viewCosmetics() {
       h("div", {}, h("h1", {}, "Cosmetics"), h("p", { class: "sub" }, "Pro Slot ein Cosmetic. Der Katalog wächst über Updates.")),
       h("button", { class: "btn", onclick: syncCosmetics }, "Synchronisieren")
     ),
-    h("div", { class: "banner" }, "Ausgerüstete Cosmetics gibt Atlas beim Start an das Spiel weiter. Gezeichnet werden sie vom Atlas-Cosmetics-Mod, der noch folgt.")
+    h("div", { class: "banner" }, "Ausgerüstete Cosmetics zeichnet der Atlas-Cosmetics-Mod im Spiel (Fabric, Minecraft 26.2). Atlas installiert ihn beim Start automatisch. Du siehst sie nur selbst.")
   );
   const list = state.cosmetics.catalog.cosmetics;
   if (!list.length) {

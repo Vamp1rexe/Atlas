@@ -11,6 +11,7 @@ Minecraft-Launcher im Stil des Modrinth-Launchers, mit eigenem Cosmetics-System.
 
 ```
 crates/atlas-core/   Launcher-Logik (Auth, Versionen, Java, Start, Modrinth, Cosmetics)
+mod/                 Atlas-Cosmetics-Mod (Fabric, Minecraft 26.2)
 src-tauri/           Tauri-App (Befehle für die UI)
 ui/                  Oberfläche (HTML/CSS/JS, kein Build-Schritt)
 cosmetics/           Cosmetics-Katalog und Assets
